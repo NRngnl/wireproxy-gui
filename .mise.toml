@@ -1,0 +1,15 @@
+[tools]
+go = "1.26.4"
+golangci-lint = "2.12.2"
+
+[tasks.test]
+description = "Run Go tests"
+run = "go test ./..."
+
+[tasks.build]
+description = "Build the desktop GUI"
+run = "go build -o bin/wireproxy-gui ./cmd/wireproxy-gui"
+
+[tasks.lint]
+description = "Run golangci-lint"
+run = "golangci-lint run"

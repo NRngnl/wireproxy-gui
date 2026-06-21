@@ -1,0 +1,73 @@
+version: "2"
+
+run:
+  timeout: 5m
+  relative-path-mode: gomod
+  modules-download-mode: readonly
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - copyloopvar
+    - durationcheck
+    - depguard
+    - err113
+    - errchkjson
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - modernize
+    - nilerr
+    - nilnesserr
+    - noctx
+    - noinlineerr
+    - nolintlint
+    - nosprintfhostport
+    - perfsprint
+    - predeclared
+    - revive
+    - sloglint
+    - unconvert
+    - wastedassign
+    - wsl_v5
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+      - path: internal/cli/route\.go
+        text: "G704: SSRF via taint analysis"
+        linters:
+          - gosec
+  settings:
+    depguard:
+      rules:
+        logging:
+          deny:
+            - pkg: log
+              desc: Use log/slog for logging.
+    misspell:
+      locale: US
+    nolintlint:
+      allow-unused: false
+      require-explanation: true
+      require-specific: true
+    wsl_v5:
+      default: none
+      enable:
+        - err
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
