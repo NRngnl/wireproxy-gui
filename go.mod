@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	fyne.io/fyne/v2 v2.7.4
 	github.com/ncruces/zenity v0.10.14
-	github.com/things-go/go-socks5 v0.0.5
+	github.com/things-go/go-socks5 v0.1.1
 	github.com/windtf/wireproxy v1.1.2
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
 	tailscale.com v1.100.0
