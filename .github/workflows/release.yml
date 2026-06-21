@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  APP_ID: com.github.nrngnl.wireproxy-gui
+  APP_ID: com.example.wireproxy-gui
   FYNE_CROSS_VERSION: v1.6.2
 
 jobs:

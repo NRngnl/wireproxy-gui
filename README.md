@@ -1,21 +1,27 @@
 # Wireproxy GUI
 
-Wireproxy GUI is a small Go/Fyne desktop app for running WireGuard-backed
-SOCKS5 proxies from a native GUI and system tray. It manages multiple saved
-profiles, starts each connection in-process through the `github.com/windtf/wireproxy`
-library, and does not shell out to the `wireproxy` command-line tool.
+Wireproxy GUI is a small Go/Fyne desktop app for running WireGuard- or
+Tailscale-backed SOCKS5 proxies from a native GUI and system tray. It manages
+multiple saved profiles, starts each connection in-process through the embedded
+WireGuard engine or an embedded Tailscale `tsnet` node, and does not shell out to
+the `wireproxy`, `tailscale`, or `tailscaled` command-line tools.
 
-The app is intended for users who already have WireGuard profile files and want
-each profile exposed as a local SOCKS5 listener, such as `127.0.0.1:1080`.
+The app is intended for users who already have WireGuard profile files or a
+Tailscale tailnet and want each profile exposed as a local SOCKS5 listener, such
+as `127.0.0.1:1080`.
 
 ## Features
 
-- Add profiles manually or import WireGuard `.conf` files.
+- Add WireGuard or Tailscale profiles manually, or import WireGuard `.conf`
+  files.
 - Import and export JSON profile bundles.
 - Run multiple profiles at the same time with separate SOCKS5 bind addresses.
 - Connect or disconnect one profile, or connect/disconnect every saved profile.
 - Show profile status in the sidebar and tray menu.
-- Show the SOCKS5 bind address and WireGuard interface address for each profile.
+- Show the SOCKS5 bind address and backend detail for each profile.
+- Register an embedded Tailscale device with an auth key or browser sign-in.
+- Select a Tailscale exit node manually, by node ID, MagicDNS base name, or IP,
+  or with automatic mode.
 - Follow each profile log by default, with scrollback preserved when you scroll up.
 - Auto-connect selected profiles when the app opens.
 - Use native file dialogs for import and export.
@@ -27,7 +33,7 @@ each profile exposed as a local SOCKS5 listener, such as `127.0.0.1:1080`.
 - Go 1.26.4.
 - macOS, Linux, or Windows with GUI support from Fyne.
 - `mise` is optional, but the repo includes `.mise.toml` for tool pinning.
-- No separate `wireproxy` binary is required.
+- No separate `wireproxy`, `tailscale`, or `tailscaled` binary is required.
 
 For native file dialogs, macOS and Windows work through the platform dialog
 support used by `github.com/ncruces/zenity`. On Unix-like desktops, install one
@@ -168,6 +174,26 @@ BindAddress = 127.0.0.1:1080
 
 Use a unique SOCKS5 bind address for every profile you run at the same time.
 
+## Tailscale Profiles
+
+Tailscale profiles run an embedded `tsnet` node with one state directory per
+profile. Paste an auth key and click Login or Connect to register this app as a
+Tailscale device. Leave the auth key empty to use the browser sign-in URL written
+to the profile log.
+
+If Tailscale requires device approval, the profile log asks you to approve the
+device in the Tailscale admin console and the app continues automatically after
+approval. After authentication succeeds, the saved auth key is removed from the
+profile and the auth field shows Authenticated. Click Logout to remove that
+profile's stored Tailscale state and unlock auth again.
+
+Exit-node choices are loaded manually. Connect the Tailscale profile, click
+Refresh next to the exit-node field, and refresh again after tailnet device or
+approval changes. You can also type a node ID, MagicDNS base name, or Tailscale
+IP address manually. Automatic exit asks Tailscale to choose an available exit
+node. While connected, change the exit-node mode, selected node, or LAN access
+setting and click Save to apply it without reconnecting.
+
 ## Import And Export
 
 Import accepts:
@@ -175,6 +201,10 @@ Import accepts:
 - WireGuard `.conf` files.
 - JSON files previously exported by Wireproxy GUI.
 - JSON arrays or single JSON profile objects with compatible fields.
+
+Tailscale node state and the local authenticated marker are not exported.
+Imported Tailscale profiles are treated as not authenticated and require Login
+again.
 
 Export writes a JSON bundle:
 
@@ -186,15 +216,26 @@ Export writes a JSON bundle:
 ```
 
 Exported files are written with `0600` permissions where supported because they
-may contain WireGuard private keys.
+may contain WireGuard private keys or saved Tailscale auth keys.
 
 ## Runtime Behavior
 
-Each connected profile owns an embedded WireGuard engine and SOCKS5 listener.
-The app tracks profile states as disconnected, connecting, connected,
-disconnecting, or error. Profile configuration and SOCKS5 bind address are
-locked while a profile is active; disconnect the profile before changing runtime
-connection settings.
+Each connected profile owns an embedded backend and SOCKS5 listener. WireGuard
+profiles run the embedded WireGuard engine; Tailscale profiles run an embedded
+tsnet node. The app tracks profile states as disconnected, connecting,
+connected, disconnecting, or error. Runtime fields are locked while a profile is
+active; disconnect the profile before changing backend, SOCKS5 bind, WireGuard
+config, or Tailscale auth settings. Tailscale exit-node settings can be changed
+while connected; click Save to apply the new exit-node preference to the running
+embedded node.
+
+For Tailscale profiles, paste an auth key and click Login or Connect to register
+the embedded `tsnet` node. Leave the auth key empty to use the browser sign-in
+URL written to the profile log. If Tailscale requires device approval, the log
+asks you to approve the device in the Tailscale admin console and the app
+continues automatically after approval. Successful auth clears the saved auth key
+and marks the profile authenticated until Logout removes the stored `tsnet`
+state.
 
 When quitting from the tray or closing the app, Wireproxy GUI calls graceful
 shutdown for all active profiles and waits up to five seconds for listeners to

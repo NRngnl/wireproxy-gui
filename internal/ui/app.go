@@ -19,9 +19,10 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/NRngnl/wireproxy-gui/internal/buildinfo"
-	"github.com/NRngnl/wireproxy-gui/internal/profile"
-	"github.com/NRngnl/wireproxy-gui/internal/wireproxy"
+	"example.com/wireproxy-gui/internal/buildinfo"
+	"example.com/wireproxy-gui/internal/connection"
+	"example.com/wireproxy-gui/internal/profile"
+	"example.com/wireproxy-gui/internal/runner"
 )
 
 const (
@@ -31,17 +32,22 @@ const (
 )
 
 var usageGuideParagraphs = []string{
-	"Add or import a WireGuard profile, then choose a SOCKS5 host and port for that profile.",
+	"Add a WireGuard or Tailscale profile, then choose a SOCKS5 host and port for that profile.",
 	"Each connected, connecting, or disconnecting profile must use a unique SOCKS5 bind address, such as 127.0.0.1:1080 and 127.0.0.1:1081.",
-	"Connect starts the embedded WireGuard engine and SOCKS5 listener for the selected profile. The app does not launch the wireproxy command-line tool. Connect All starts every saved profile. Runtime status is shown in the selected profile log.",
+	"Connect starts the embedded backend and SOCKS5 listener for the selected profile. WireGuard profiles use the embedded WireGuard engine. Tailscale profiles use an embedded tsnet node. The app does not launch the wireproxy, tailscale, or tailscaled command-line tools. Connect All starts every saved profile. Runtime status is shown in the selected profile log.",
+	"Tailscale auth is not the same as WireGuard config. Paste an auth key and click Login or Connect to register this app as a Tailscale device; leave Auth key empty for a browser sign-in URL in the profile log. If Tailscale requires device approval, the profile log will ask you to approve the device in the admin console and the app will detect approval automatically. After authentication succeeds, the app removes the saved auth key, marks the profile authenticated, and keeps the auth field locked until you click Logout. Logout removes this profile's stored Tailscale state and unlocks auth. Auth key, control URL, hostname, backend, and SOCKS5 bind fields are locked while that profile is connected, connecting, or disconnecting. Exit-node mode, selected exit node, and LAN access can be changed while connected; click Save to apply them without reconnecting.",
+	"Exit-node choices are not live-updating. Connect the Tailscale profile, click Refresh to load available exit-node devices from that tailnet, and click Refresh again after tailnet devices or approvals change. You can also type a node ID, hostname, or Tailscale IP manually. Automatic exit asks Tailscale to choose an available exit node.",
 	"The profile log follows the newest line by default. Scrolling up pauses following so you can read earlier output; scrolling back to the bottom follows new lines again.",
-	"The tray menu has one profile row per profile. The colored dot shows connection status, and each submenu shows status text, SOCKS5 bind address, WireGuard IP, and Connect or Disconnect actions. The icon is green only while connected; other states use a red icon and the status text shows disconnected, connecting, disconnecting, or error.",
-	"Disconnect a connected profile, and wait for it to finish disconnecting, before changing its WireGuard configuration or SOCKS5 bind address. Profile name and startup preference can be changed while connected.",
-	"Import and Export open the operating system's native file dialog and use the selected filesystem path. Export writes profiles as JSON. Import accepts exported JSON bundles or WireGuard .conf files.",
+	"The tray menu has one profile row per profile. The colored dot shows connection status, and each submenu shows status text, SOCKS5 bind address, backend detail, and Connect or Disconnect actions. The icon is green only while connected; other states use a red icon and the status text shows disconnected, connecting, disconnecting, or error.",
+	"Disconnect a connected or connecting profile, and wait for it to finish disconnecting, before changing its backend, tunnel configuration, or SOCKS5 bind address. Profile name and startup preference can be changed while connected.",
+	"Import and Export open the operating system's native file dialog and use the selected filesystem path. Export writes profiles as JSON. Import accepts exported JSON bundles or WireGuard .conf files. Tailscale node state and the local authenticated marker are not exported, so imported Tailscale profiles require Login again.",
 	"Closing the window hides it when tray support is available. Use Quit from the tray menu to stop all profiles, wait briefly for them to close, and exit.",
 }
 
-var errRuntimeProfileEdit = errors.New("disconnect the profile, and wait for it to finish disconnecting, before changing its WireGuard configuration or SOCKS5 bind address")
+var errRuntimeProfileEdit = errors.New("disconnect the profile, and wait for it to finish disconnecting, before changing its backend, SOCKS5 bind address, WireGuard config, or Tailscale auth settings")
+var errRuntimeExitNodeEdit = errors.New("wait until the Tailscale profile is connected or disconnected before changing exit-node settings")
+
+var runOnUI = fyne.Do
 
 var (
 	connectedTrayIcon    = fyne.NewStaticResource("status-connected.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#28a745"/></svg>`))
@@ -63,19 +69,33 @@ type GUI struct {
 
 	shutdownOnce sync.Once
 
-	profiles   []profile.Profile
-	selectedID string
-	statuses   map[string]string
-	logs       map[string][]string
-	logTails   map[string]bool
-	logOffsets map[string]fyne.Position
+	profiles     []profile.Profile
+	selectedID   string
+	statuses     map[string]string
+	logs         map[string][]string
+	logTails     map[string]bool
+	logOffsets   map[string]fyne.Position
+	startCancels map[string]context.CancelFunc
 
 	list           *widget.List
+	kindSelect     *widget.Select
 	nameEntry      *widget.Entry
 	hostEntry      *widget.Entry
 	portEntry      *widget.Entry
 	autoStartCheck *widget.Check
 	configEntry    *widget.Entry
+	configLabel    *widget.Label
+	tailscaleForm  *widget.Form
+	tsHostname     *widget.Entry
+	tsAuthKey      *widget.Entry
+	tsLoginButton  *widget.Button
+	tsControlURL   *widget.Entry
+	tsExitNode     *widget.SelectEntry
+	tsExitRefresh  *widget.Button
+	tsExitValues   map[string]string
+	tsAutoExit     *widget.Check
+	tsAllowLAN     *widget.Check
+	tsEphemeral    *widget.Check
 	logLabel       *widget.Label
 	logScroll      *container.Scroll
 	logTail        bool
@@ -94,8 +114,11 @@ type profileFileDialog interface {
 }
 
 type profileRunner interface {
-	Events() <-chan wireproxy.Event
+	Events() <-chan connection.Event
 	Running(profileID string) bool
+	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
+	UpdateExitNode(context.Context, string, profile.TailscaleConfig) error
+	Logout(context.Context, string) error
 	Start(context.Context, profile.Profile) error
 	Stop(profileID string) bool
 	StopAll()
@@ -109,7 +132,7 @@ func (e displayError) Error() string {
 }
 
 func Run() {
-	fyneApp := app.NewWithID("com.github.nrngnl.wireproxy-gui")
+	fyneApp := app.NewWithID("com.example.wireproxy-gui")
 	applyAppTheme(fyneApp)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -119,14 +142,15 @@ func Run() {
 	}
 
 	gui := &GUI{
-		app:      fyneApp,
-		store:    profile.NewStore(storePath),
-		runner:   wireproxy.NewRunner(),
-		ctx:      ctx,
-		cancel:   cancel,
-		files:    nativeProfileFileDialog{},
-		statuses: map[string]string{},
-		logs:     map[string][]string{},
+		app:          fyneApp,
+		store:        profile.NewStore(storePath),
+		runner:       runner.New(),
+		ctx:          ctx,
+		cancel:       cancel,
+		files:        nativeProfileFileDialog{},
+		statuses:     map[string]string{},
+		logs:         map[string][]string{},
+		startCancels: map[string]context.CancelFunc{},
 	}
 
 	loadErr := gui.load()
@@ -160,12 +184,17 @@ func (g *GUI) build() {
 	g.window = g.app.NewWindow(tr(buildinfo.WindowTitle()))
 	g.window.Resize(fyne.NewSize(1120, 760))
 
+	g.kindSelect = widget.NewSelect([]string{tr("WireGuard"), tr("Tailscale")}, func(_ string) {
+		g.updateBackendVisibility(g.selectedBackendKind())
+	})
 	g.nameEntry = widget.NewEntry()
 	g.hostEntry = widget.NewEntry()
 	g.portEntry = widget.NewEntry()
 	g.autoStartCheck = widget.NewCheck(tr("Connect when app opens"), nil)
 
 	g.configEntry = newWireGuardConfigEntry()
+	g.configLabel = widget.NewLabel(tr("WireGuard configuration"))
+	g.setupTailscaleForm()
 
 	g.setupLogView()
 
@@ -198,6 +227,7 @@ func (g *GUI) build() {
 
 	form := &widget.Form{
 		Items: []*widget.FormItem{
+			{Text: tr("Backend"), Widget: g.kindSelect},
 			{Text: tr("Name"), Widget: g.nameEntry},
 			{Text: tr("SOCKS5 host"), Widget: g.hostEntry},
 			{Text: tr("SOCKS5 port"), Widget: g.portEntry},
@@ -215,12 +245,12 @@ func (g *GUI) build() {
 		widget.NewButtonWithIcon(tr("Export All"), theme.UploadIcon(), g.exportAll),
 	)
 	detail := container.NewBorder(
-		container.NewVBox(g.statusLabel, form, widget.NewLabel(tr("WireGuard configuration"))),
+		container.NewVBox(g.statusLabel, form, g.configLabel),
 		actionBar,
 		nil,
 		nil,
 		newConfigLogSplit(
-			g.configEntry,
+			container.NewStack(g.configEntry, g.tailscaleForm),
 			container.NewBorder(widget.NewLabel(tr("Profile log")), nil, nil, nil, g.logScroll),
 		),
 	)
@@ -240,6 +270,244 @@ func newWireGuardConfigEntry() *widget.Entry {
 	entry.SetMinRowsVisible(configEditorMinRows)
 	entry.Wrapping = fyne.TextWrapOff
 	return entry
+}
+
+func (g *GUI) setupTailscaleForm() {
+	g.tsHostname = widget.NewEntry()
+	g.tsHostname.SetPlaceHolder(tr("Defaults to profile name"))
+	g.tsAuthKey = widget.NewPasswordEntry()
+	g.tsAuthKey.SetPlaceHolder(tr("Optional; paste auth key, or leave empty for browser sign-in"))
+	g.tsLoginButton = widget.NewButtonWithIcon(tr("Login"), theme.LoginIcon(), g.tailscaleAuthActionSelected)
+	g.tsControlURL = widget.NewEntry()
+	g.tsControlURL.SetPlaceHolder(tr("Optional; leave empty for Tailscale"))
+	g.tsExitValues = map[string]string{}
+	g.tsExitNode = widget.NewSelectEntry(nil)
+	g.tsExitNode.PlaceHolder = tr("Refresh to choose a device, or type a node/IP")
+	g.tsExitRefresh = widget.NewButtonWithIcon(tr("Refresh"), theme.ViewRefreshIcon(), g.refreshExitNodeOptions)
+	g.tsAutoExit = widget.NewCheck(tr("Use automatic exit node"), func(checked bool) {
+		g.updateExitNodeControlState()
+	})
+	g.tsAllowLAN = widget.NewCheck(tr("Allow LAN access while using exit node"), nil)
+	g.tsEphemeral = widget.NewCheck(tr("Register as ephemeral node"), nil)
+	authKeyControl := container.NewBorder(nil, nil, nil, g.tsLoginButton, g.tsAuthKey)
+	exitNodeControl := container.NewBorder(nil, nil, nil, g.tsExitRefresh, g.tsExitNode)
+	g.tailscaleForm = &widget.Form{
+		Items: []*widget.FormItem{
+			{
+				Text:     tr("Tailscale hostname"),
+				Widget:   g.tsHostname,
+				HintText: tr("Used when registering this app as a Tailscale device."),
+			},
+			{
+				Text:     tr("Auth key"),
+				Widget:   authKeyControl,
+				HintText: tr("Paste an auth key, then click Login. Leave it empty to use the browser sign-in URL in the profile log. After authentication succeeds, the saved auth key is removed and this field stays locked until Logout. Logout removes this profile's stored Tailscale state and unlocks auth."),
+			},
+			{
+				Text:     tr("Control URL"),
+				Widget:   g.tsControlURL,
+				HintText: tr("Only needed for a custom control server."),
+			},
+			{
+				Text:     tr("Exit node"),
+				Widget:   exitNodeControl,
+				HintText: tr("Connect first, then refresh to list devices from this tailnet. Save while connected to apply exit-node changes immediately."),
+			},
+			{
+				Text:     tr("Exit node mode"),
+				Widget:   g.tsAutoExit,
+				HintText: tr("Automatic exit asks Tailscale to choose an available exit node."),
+			},
+			{Text: tr("LAN access"), Widget: g.tsAllowLAN},
+			{Text: tr("Node lifetime"), Widget: g.tsEphemeral},
+		},
+	}
+}
+
+func (g *GUI) selectedBackendKind() profile.BackendKind {
+	if g.kindSelect == nil {
+		return profile.BackendWireGuard
+	}
+	switch g.kindSelect.Selected {
+	case tr("Tailscale"):
+		return profile.BackendTailscale
+	default:
+		return profile.BackendWireGuard
+	}
+}
+
+func backendKindLabel(kind profile.BackendKind) string {
+	if (profile.Profile{Kind: kind}).IsTailscale() {
+		return tr("Tailscale")
+	}
+	return tr("WireGuard")
+}
+
+func (g *GUI) updateBackendVisibility(kind profile.BackendKind) {
+	if g.configEntry == nil || g.tailscaleForm == nil || g.configLabel == nil {
+		return
+	}
+	if (profile.Profile{Kind: kind}).IsTailscale() {
+		g.configLabel.SetText(tr("Tailscale configuration"))
+		g.configEntry.Hide()
+		g.tailscaleForm.Show()
+		g.updateExitNodeControlState()
+		return
+	}
+	g.configLabel.SetText(tr("WireGuard configuration"))
+	g.tailscaleForm.Hide()
+	g.configEntry.Show()
+}
+
+func (g *GUI) setTailscaleForm(config profile.TailscaleConfig) {
+	config.Normalize()
+	g.tsHostname.SetText(config.Hostname)
+	if config.Authenticated {
+		g.tsAuthKey.SetText("")
+	} else {
+		g.tsAuthKey.SetText(config.AuthKey)
+	}
+	g.tsControlURL.SetText(config.ControlURL)
+	g.tsExitNode.SetText(config.ExitNode)
+	g.tsAutoExit.SetChecked(config.AutoExitNode)
+	g.tsAllowLAN.SetChecked(config.ExitNodeAllowLANAccess)
+	g.tsEphemeral.SetChecked(config.Ephemeral)
+	g.updateTailscaleAuthControlState(config)
+}
+
+func (g *GUI) updateTailscaleAuthControlState(config profile.TailscaleConfig) {
+	if g.tsAuthKey == nil || g.tsLoginButton == nil {
+		return
+	}
+	if config.Authenticated {
+		g.tsAuthKey.SetPlaceHolder(tr("Authenticated"))
+		g.tsLoginButton.SetText(tr("Logout"))
+		g.tsLoginButton.SetIcon(theme.LogoutIcon())
+		return
+	}
+	g.tsAuthKey.SetPlaceHolder(tr("Optional; paste auth key, or leave empty for browser sign-in"))
+	g.tsLoginButton.SetText(tr("Login"))
+	g.tsLoginButton.SetIcon(theme.LoginIcon())
+}
+
+func (g *GUI) updateExitNodeControlState() {
+	enabled := g.tsAutoExit != nil && !g.tsAutoExit.Checked && !g.tsAutoExit.Disabled()
+	g.setExitNodeControlsEnabled(enabled)
+}
+
+func (g *GUI) setExitNodeControlsEnabled(enabled bool) {
+	if g.tsExitNode != nil {
+		if enabled {
+			g.tsExitNode.Enable()
+		} else {
+			g.tsExitNode.Disable()
+		}
+	}
+	if g.tsExitRefresh != nil {
+		if enabled {
+			g.tsExitRefresh.Enable()
+		} else {
+			g.tsExitRefresh.Disable()
+		}
+	}
+}
+
+func (g *GUI) refreshExitNodeOptions() {
+	if g.runner == nil {
+		return
+	}
+	p, ok := g.currentProfile()
+	if !ok || !p.IsTailscale() {
+		return
+	}
+	profileID := p.ID
+	ctx := g.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go func() {
+		nodes, err := g.runner.ExitNodes(ctx, profileID)
+		runOnUI(func() {
+			if err != nil {
+				g.showError("Refresh exit nodes", err)
+				return
+			}
+			g.applyExitNodeOptions(nodes)
+			if len(nodes) == 0 {
+				g.appendLog(profileID, time.Now(), "no Tailscale exit nodes found")
+				g.refresh()
+			}
+		})
+	}()
+}
+
+func (g *GUI) applyExitNodeOptions(nodes []connection.ExitNode) {
+	if g.tsExitNode == nil {
+		return
+	}
+	current := g.selectedExitNodeValue()
+	values := make(map[string]string, len(nodes))
+	options := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if strings.TrimSpace(node.ID) == "" {
+			continue
+		}
+		label := exitNodeOptionLabel(node)
+		if label == "" {
+			continue
+		}
+		for {
+			if _, exists := values[label]; !exists {
+				break
+			}
+			label = label + " " + node.ID
+		}
+		values[label] = node.ID
+		options = append(options, label)
+	}
+	g.tsExitValues = values
+	g.tsExitNode.SetOptions(options)
+	if current == "" {
+		return
+	}
+	if label, ok := exitNodeLabelForValue(values, current); ok {
+		g.tsExitNode.SetText(label)
+		return
+	}
+	g.tsExitNode.SetText(current)
+}
+
+func (g *GUI) selectedExitNodeValue() string {
+	if g.tsExitNode == nil {
+		return ""
+	}
+	value := strings.TrimSpace(g.tsExitNode.Text)
+	if g.tsExitValues != nil {
+		if mapped, ok := g.tsExitValues[value]; ok {
+			return mapped
+		}
+	}
+	return value
+}
+
+func exitNodeOptionLabel(node connection.ExitNode) string {
+	label := strings.TrimSpace(node.Name)
+	if label == "" {
+		label = strings.TrimSpace(node.ID)
+	}
+	if label == "" && len(node.TailscaleIPs) > 0 {
+		label = node.TailscaleIPs[0]
+	}
+	return label
+}
+
+func exitNodeLabelForValue(values map[string]string, value string) (string, bool) {
+	for label, mapped := range values {
+		if mapped == value {
+			return label, true
+		}
+	}
+	return "", false
 }
 
 func newConfigLogSplit(configPanel, logPanel fyne.CanvasObject) *container.Split {
@@ -431,7 +699,7 @@ func logMaxScrollOffset(scroll *container.Scroll) float32 {
 func (g *GUI) trayMenu() *fyne.Menu {
 	items := []*fyne.MenuItem{
 		fyne.NewMenuItem(tr("Show"), func() {
-			fyne.Do(func() {
+			runOnUI(func() {
 				g.window.Show()
 				g.window.RequestFocus()
 			})
@@ -446,10 +714,10 @@ func (g *GUI) trayMenu() *fyne.Menu {
 	items = append(items,
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem(tr("Connect All"), func() {
-			fyne.Do(g.connectAll)
+			runOnUI(g.connectAll)
 		}),
 		fyne.NewMenuItem(tr("Disconnect All"), func() {
-			fyne.Do(g.disconnectAll)
+			runOnUI(g.disconnectAll)
 		}),
 		fyne.NewMenuItemSeparator(),
 		g.trayQuitMenuItem(),
@@ -463,12 +731,12 @@ func (g *GUI) profileTrayMenuItem(p profile.Profile) *fyne.MenuItem {
 	item := fyne.NewMenuItemWithIcon(p.Name, trayStatusIcon(status), nil)
 
 	connect := fyne.NewMenuItem(tr("Connect"), func() {
-		fyne.Do(func() {
+		runOnUI(func() {
 			g.connectProfileFromTray(p.ID)
 		})
 	})
 	disconnect := fyne.NewMenuItem(tr("Disconnect"), func() {
-		fyne.Do(func() {
+		runOnUI(func() {
 			g.disconnectProfileFromTray(p.ID)
 		})
 	})
@@ -481,7 +749,7 @@ func (g *GUI) profileTrayMenuItem(p profile.Profile) *fyne.MenuItem {
 	item.ChildMenu = fyne.NewMenu(p.Name,
 		disabledMenuItem(tr("Status: {{.Status}}", map[string]any{"Status": trayStatusText(status)})),
 		disabledMenuItem(tr("SOCKS5 bind: {{.Address}}", map[string]any{"Address": p.BindAddress()})),
-		disabledMenuItem(tr("WireGuard IP: {{.Address}}", map[string]any{"Address": wireGuardAddressText(p)})),
+		disabledMenuItem(profileNetworkDetailText(p)),
 		fyne.NewMenuItemSeparator(),
 		connect,
 		disconnect,
@@ -497,7 +765,7 @@ func disabledMenuItem(label string) *fyne.MenuItem {
 
 func (g *GUI) trayQuitMenuItem() *fyne.MenuItem {
 	quit := fyne.NewMenuItem(tr("Quit"), func() {
-		fyne.Do(func() {
+		runOnUI(func() {
 			g.shutdown()
 			g.app.Quit()
 		})
@@ -576,14 +844,29 @@ func wireGuardAddressText(p profile.Profile) string {
 	return address
 }
 
+func profileNetworkDetailText(p profile.Profile) string {
+	if p.IsTailscale() {
+		hostname := p.TailscaleConfig.Hostname
+		if hostname == "" {
+			hostname = p.Name
+		}
+		return tr("Tailscale node: {{.Name}}", map[string]any{"Name": hostname})
+	}
+	return tr("WireGuard IP: {{.Address}}", map[string]any{"Address": wireGuardAddressText(p)})
+}
+
 func (g *GUI) events() {
 	go func() {
+		events := g.runner.Events()
 		for {
 			select {
 			case <-g.ctx.Done():
 				return
-			case ev := <-g.runner.Events():
-				fyne.Do(func() {
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				runOnUI(func() {
 					g.handleEvent(ev)
 				})
 			}
@@ -591,20 +874,28 @@ func (g *GUI) events() {
 	}()
 }
 
-func (g *GUI) handleEvent(ev wireproxy.Event) {
+func (g *GUI) handleEvent(ev connection.Event) {
 	if !g.hasProfile(ev.ProfileID) {
 		return
 	}
 	switch ev.Type {
-	case wireproxy.EventStarted:
+	case connection.EventStarted:
 		g.statuses[ev.ProfileID] = "running"
-	case wireproxy.EventStopped:
+	case connection.EventStopped:
 		g.statuses[ev.ProfileID] = "stopped"
-	case wireproxy.EventError:
+	case connection.EventError:
 		g.statuses[ev.ProfileID] = "error"
 	}
 	g.appendLog(ev.ProfileID, ev.At, ev.Message)
+	if ev.Type == connection.EventStarted {
+		g.markTailscaleAuthenticated(ev.ProfileID)
+	}
 	g.refresh()
+	if ev.Type == connection.EventStarted && ev.ProfileID == g.selectedID {
+		if p, ok := g.profileByID(ev.ProfileID); ok && p.IsTailscale() {
+			g.refreshExitNodeOptions()
+		}
+	}
 }
 
 func (g *GUI) startAutoProfiles() {
@@ -633,6 +924,9 @@ func (g *GUI) startAutoProfiles() {
 
 func (g *GUI) shutdown() {
 	g.shutdownOnce.Do(func() {
+		if g.cancel != nil {
+			g.cancel()
+		}
 		if g.runner != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), shutdownWaitTimeout)
 			err := g.runner.StopAllAndWait(ctx)
@@ -640,9 +934,6 @@ func (g *GUI) shutdown() {
 			if err != nil {
 				fyne.LogError(tr("Error stopping profiles during shutdown"), err)
 			}
-		}
-		if g.cancel != nil {
-			g.cancel()
 		}
 	})
 }
@@ -733,7 +1024,7 @@ func (g *GUI) exportProfiles(profiles []profile.Profile, fileName string) {
 }
 
 func exportProfilesToPath(profiles []profile.Profile, path string) error {
-	data, err := profile.EncodeBundle(profiles)
+	data, err := profile.EncodeExportBundle(profiles)
 	if err != nil {
 		return err
 	}
@@ -764,8 +1055,19 @@ func (g *GUI) saveSelectedProfile() error {
 	if g.runtimeLocked(existing) && runtimeConfigChanged(existing, p) {
 		return errRuntimeProfileEdit
 	}
+	exitNodeChanged := tailscaleExitNodeConfigChanged(existing, p)
+	applyExitNode := exitNodeChanged && g.canUpdateRuntimeExitNode(existing)
+	if g.runtimeLocked(existing) && exitNodeChanged && !applyExitNode {
+		return errRuntimeExitNodeEdit
+	}
 	if !profileFieldsChanged(existing, p) {
 		return nil
+	}
+	if applyExitNode {
+		err = g.updateRunningExitNode(p)
+		if err != nil {
+			return err
+		}
 	}
 	p.Touch()
 	g.profiles[idx] = p
@@ -774,8 +1076,28 @@ func (g *GUI) saveSelectedProfile() error {
 		return err
 	}
 	g.selectedID = p.ID
-	g.appendLog(p.ID, time.Now(), "saved profile")
+	logMessage := "saved profile"
+	if applyExitNode {
+		logMessage = "updated Tailscale exit-node settings"
+	}
+	g.appendLog(p.ID, time.Now(), logMessage)
 	g.refresh()
+	return nil
+}
+
+func (g *GUI) canUpdateRuntimeExitNode(p profile.Profile) bool {
+	return p.IsTailscale() && g.runner.Running(p.ID) && g.statuses[p.ID] == "running"
+}
+
+func (g *GUI) updateRunningExitNode(p profile.Profile) error {
+	ctx := g.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	err := g.runner.UpdateExitNode(ctx, p.ID, p.TailscaleConfig)
+	if err != nil {
+		return fmt.Errorf("update Tailscale exit node: %w", err)
+	}
 	return nil
 }
 
@@ -789,6 +1111,7 @@ func (g *GUI) deleteSelected() {
 		if !ok {
 			return
 		}
+		g.cancelStartingProfile(p.ID)
 		g.runner.Stop(p.ID)
 		g.profiles = append(g.profiles[:idx], g.profiles[idx+1:]...)
 		delete(g.statuses, p.ID)
@@ -824,10 +1147,88 @@ func (g *GUI) connectSelected() {
 		g.showError("Connect profile", err)
 		return
 	}
-	err = g.startProfile(p)
+	err = g.startProfile(p, "Connect profile")
 	if err != nil {
 		g.showError("Connect profile", err)
 	}
+}
+
+func (g *GUI) tailscaleAuthActionSelected() {
+	p, ok := g.currentProfile()
+	if ok && p.IsTailscale() && p.TailscaleConfig.Authenticated {
+		g.logoutTailscaleSelected()
+		return
+	}
+	g.loginTailscaleSelected()
+}
+
+func (g *GUI) loginTailscaleSelected() {
+	err := g.saveSelectedProfile()
+	if err != nil {
+		g.showError("Login to Tailscale", err)
+		return
+	}
+	p, ok := g.currentProfile()
+	if !ok {
+		return
+	}
+	if !p.IsTailscale() {
+		g.showError("Login to Tailscale", displayError("select a Tailscale profile before login"))
+		return
+	}
+	err = g.runningBindConflict(p)
+	if err != nil {
+		g.showError("Login to Tailscale", err)
+		return
+	}
+	err = g.startProfile(p, "Login to Tailscale")
+	if err != nil {
+		g.showError("Login to Tailscale", err)
+	}
+}
+
+func (g *GUI) logoutTailscaleSelected() {
+	idx := g.selectedIndex()
+	if idx < 0 {
+		return
+	}
+	p := g.profiles[idx]
+	if !p.IsTailscale() {
+		g.showError("Logout from Tailscale", displayError("select a Tailscale profile before logout"))
+		return
+	}
+	if g.runtimeLocked(p) {
+		g.showError("Logout from Tailscale", errRuntimeProfileEdit)
+		return
+	}
+	updated := p
+	updated.TailscaleConfig.AuthKey = ""
+	updated.TailscaleConfig.Authenticated = false
+	updated.Touch()
+	g.profiles[idx] = updated
+	err := g.saveAll()
+	if err != nil {
+		g.profiles[idx] = p
+		g.showError("Logout from Tailscale", err)
+		return
+	}
+	ctx := g.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	err = g.runner.Logout(ctx, p.ID)
+	if err != nil {
+		g.profiles[idx] = p
+		if restoreErr := g.saveAll(); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore Tailscale authentication state: %w", restoreErr))
+		}
+		g.showError("Logout from Tailscale", err)
+		return
+	}
+	g.selectedID = p.ID
+	g.appendLog(p.ID, time.Now(), "logged out of Tailscale")
+	g.refresh()
+	g.showSelected()
 }
 
 func (g *GUI) disconnectSelected() {
@@ -835,7 +1236,8 @@ func (g *GUI) disconnectSelected() {
 	if !ok {
 		return
 	}
-	if !g.runner.Stop(p.ID) {
+	canceling := g.cancelStartingProfile(p.ID)
+	if !g.runner.Stop(p.ID) && !canceling {
 		g.statuses[p.ID] = "stopped"
 	} else {
 		g.statuses[p.ID] = "stopping"
@@ -857,7 +1259,7 @@ func (g *GUI) connectAll() {
 
 	var errs []error
 	for _, p := range g.profiles {
-		err = g.startProfile(p)
+		err = g.startProfile(p, "Connect All")
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", p.Name, err))
 		}
@@ -868,6 +1270,9 @@ func (g *GUI) connectAll() {
 }
 
 func (g *GUI) disconnectAll() {
+	for _, p := range g.profiles {
+		g.cancelStartingProfile(p.ID)
+	}
 	g.runner.StopAll()
 	for _, p := range g.profiles {
 		if g.runner.Running(p.ID) || runtimeLockedStatus(g.statuses[p.ID]) {
@@ -877,23 +1282,126 @@ func (g *GUI) disconnectAll() {
 	g.refresh()
 }
 
-func (g *GUI) startProfile(p profile.Profile) error {
+func (g *GUI) startProfile(p profile.Profile, errorTitle ...string) error {
 	if g.runner.Running(p.ID) || runtimeLockedStatus(g.statuses[p.ID]) {
 		return nil
 	}
 	g.statuses[p.ID] = "starting"
 	g.appendLog(p.ID, time.Now(), "connecting profile")
 	g.refresh()
-	err := g.runner.Start(g.ctx, p)
+	ctx := g.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	startCtx, cancel := context.WithCancel(ctx)
+	if g.startCancels == nil {
+		g.startCancels = map[string]context.CancelFunc{}
+	}
+	g.startCancels[p.ID] = cancel
+	title := ""
+	if len(errorTitle) > 0 {
+		title = errorTitle[0]
+	}
+	go g.startProfileRuntime(startCtx, p, title)
+	return nil
+}
+
+func (g *GUI) startProfileRuntime(ctx context.Context, p profile.Profile, errorTitle string) {
+	err := g.runner.Start(ctx, p)
+	runOnUI(func() {
+		g.finishProfileStart(p, errorTitle, err)
+	})
+}
+
+func (g *GUI) finishProfileStart(p profile.Profile, errorTitle string, err error) {
+	g.clearStartCancel(p.ID, err != nil)
+	if !g.hasProfile(p.ID) {
+		return
+	}
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			if runtimeLockedStatus(g.statuses[p.ID]) {
+				g.statuses[p.ID] = "stopped"
+				g.appendLog(p.ID, time.Now(), "disconnected")
+				g.refresh()
+			}
+			return
+		}
 		g.statuses[p.ID] = "error"
 		g.appendLog(p.ID, time.Now(), err.Error())
 		g.refresh()
-		return err
+		if errorTitle != "" {
+			g.showError(errorTitle, err)
+		}
+		return
 	}
-	g.statuses[p.ID] = "running"
-	g.refresh()
-	return nil
+	if g.statuses[p.ID] == "starting" {
+		g.statuses[p.ID] = "running"
+		g.markTailscaleAuthenticated(p.ID)
+		g.refresh()
+	}
+}
+
+func (g *GUI) markTailscaleAuthenticated(profileID string) {
+	idx := -1
+	for i, p := range g.profiles {
+		if p.ID == profileID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	p := g.profiles[idx]
+	if !p.IsTailscale() {
+		return
+	}
+	if p.TailscaleConfig.Authenticated && p.TailscaleConfig.AuthKey == "" {
+		return
+	}
+	updated := p
+	updated.TailscaleConfig.AuthKey = ""
+	updated.TailscaleConfig.Authenticated = true
+	updated.Touch()
+	g.profiles[idx] = updated
+	err := g.saveAll()
+	if err != nil {
+		g.profiles[idx] = p
+		g.appendLog(profileID, time.Now(), "save authenticated Tailscale profile: "+err.Error())
+		g.showError("Save profile", err)
+		return
+	}
+	g.appendLog(profileID, time.Now(), "Tailscale authenticated; auth key removed from saved profile")
+	if profileID == g.selectedID {
+		g.tsAuthKey.SetText("")
+		g.updateTailscaleAuthControlState(updated.TailscaleConfig)
+	}
+}
+
+func (g *GUI) cancelStartingProfile(profileID string) bool {
+	if g.startCancels == nil {
+		return false
+	}
+	cancel, ok := g.startCancels[profileID]
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
+}
+
+func (g *GUI) clearStartCancel(profileID string, cancelContext bool) {
+	if g.startCancels == nil {
+		return
+	}
+	cancel, ok := g.startCancels[profileID]
+	if ok {
+		if cancelContext {
+			cancel()
+		}
+		delete(g.startCancels, profileID)
+	}
 }
 
 func (g *GUI) connectProfileFromTray(profileID string) {
@@ -906,7 +1414,7 @@ func (g *GUI) connectProfileFromTray(profileID string) {
 		g.showError("Connect profile", err)
 		return
 	}
-	err = g.startProfile(p)
+	err = g.startProfile(p, "Connect profile")
 	if err != nil {
 		g.showError("Connect profile", err)
 	}
@@ -917,7 +1425,8 @@ func (g *GUI) disconnectProfileFromTray(profileID string) {
 	if !ok {
 		return
 	}
-	if !g.runner.Stop(profileID) {
+	canceling := g.cancelStartingProfile(profileID)
+	if !g.runner.Stop(profileID) && !canceling {
 		g.statuses[profileID] = "stopped"
 	} else {
 		g.statuses[profileID] = "stopping"
@@ -931,11 +1440,37 @@ func (g *GUI) profileFromForm(existing profile.Profile) (profile.Profile, error)
 	if err != nil {
 		return profile.Profile{}, profile.ErrSocksPortNotNumber
 	}
+	existing.Kind = g.selectedBackendKind()
 	existing.Name = strings.TrimSpace(g.nameEntry.Text)
 	existing.SocksHost = strings.TrimSpace(g.hostEntry.Text)
 	existing.SocksPort = port
 	existing.AutoStart = g.autoStartCheck.Checked
-	existing.WireGuardConfig = strings.TrimSpace(g.configEntry.Text)
+	if existing.IsTailscale() {
+		exitNode := g.selectedExitNodeValue()
+		if g.tsAutoExit.Checked {
+			exitNode = ""
+		}
+		authenticated := existing.TailscaleConfig.Authenticated
+		authKey := ""
+		if !authenticated {
+			authKey = strings.TrimSpace(g.tsAuthKey.Text)
+		}
+		existing.WireGuardConfig = ""
+		existing.TailscaleConfig = profile.TailscaleConfig{
+			Hostname:               strings.TrimSpace(g.tsHostname.Text),
+			AuthKey:                authKey,
+			Authenticated:          authenticated,
+			ControlURL:             strings.TrimSpace(g.tsControlURL.Text),
+			ExitNode:               exitNode,
+			AutoExitNode:           g.tsAutoExit.Checked,
+			ExitNodeAllowLANAccess: g.tsAllowLAN.Checked,
+			Ephemeral:              g.tsEphemeral.Checked,
+		}
+	} else {
+		existing.Kind = profile.BackendWireGuard
+		existing.WireGuardConfig = strings.TrimSpace(g.configEntry.Text)
+		existing.TailscaleConfig = profile.TailscaleConfig{}
+	}
 	existing.Normalize()
 	if strings.TrimSpace(existing.Name) == "" {
 		return profile.Profile{}, profile.ErrProfileNameRequired
@@ -946,7 +1481,7 @@ func (g *GUI) profileFromForm(existing profile.Profile) (profile.Profile, error)
 	if existing.SocksPort < 1 || existing.SocksPort > 65535 {
 		return profile.Profile{}, profile.ErrSocksPortOutOfRange
 	}
-	return existing, nil
+	return existing, existing.Validate()
 }
 
 func (g *GUI) saveAll() error {
@@ -964,35 +1499,52 @@ func (g *GUI) showSelected() {
 	idx := g.selectedIndex()
 	if idx < 0 {
 		g.setFormEnabled(false)
+		g.kindSelect.SetSelected(backendKindLabel(profile.BackendWireGuard))
 		g.nameEntry.SetText("")
 		g.hostEntry.SetText("")
 		g.portEntry.SetText("")
 		g.autoStartCheck.SetChecked(false)
 		g.configEntry.SetText("")
+		g.setTailscaleForm(profile.TailscaleConfig{})
 		g.setLogText("", true)
 		g.statusLabel.SetText(tr("No profile selected"))
+		g.updateBackendVisibility(profile.BackendWireGuard)
 		return
 	}
 
 	p := g.profiles[idx]
 	g.setFormEnabled(true)
+	g.kindSelect.SetSelected(backendKindLabel(p.Kind))
 	g.nameEntry.SetText(p.Name)
 	g.hostEntry.SetText(p.SocksHost)
 	g.portEntry.SetText(strconv.Itoa(p.SocksPort))
 	g.autoStartCheck.SetChecked(p.AutoStart)
 	g.configEntry.SetText(p.WireGuardConfig)
+	g.setTailscaleForm(p.TailscaleConfig)
+	g.updateBackendVisibility(p.Kind)
 	g.statusLabel.SetText(statusSummaryText(p, g.profileStatus(p.ID)))
 	g.setLogText(strings.Join(g.logs[p.ID], "\n"), false)
 	g.refreshButtons()
+	g.updateRuntimeFieldState()
 }
 
 func (g *GUI) setFormEnabled(enabled bool) {
 	widgets := []fyne.Disableable{
+		g.kindSelect,
 		g.nameEntry,
 		g.hostEntry,
 		g.portEntry,
 		g.autoStartCheck,
 		g.configEntry,
+		g.tsHostname,
+		g.tsAuthKey,
+		g.tsLoginButton,
+		g.tsControlURL,
+		g.tsExitNode,
+		g.tsExitRefresh,
+		g.tsAutoExit,
+		g.tsAllowLAN,
+		g.tsEphemeral,
 		g.saveButton,
 		g.deleteButton,
 		g.connectButton,
@@ -1006,6 +1558,8 @@ func (g *GUI) setFormEnabled(enabled bool) {
 			w.Disable()
 		}
 	}
+	g.updateBackendVisibility(g.selectedBackendKind())
+	g.updateRuntimeFieldState()
 }
 
 func (g *GUI) refresh() {
@@ -1021,6 +1575,7 @@ func (g *GUI) refresh() {
 			g.setLogText(strings.Join(g.logs[p.ID], "\n"), false)
 		}
 	}
+	g.updateRuntimeFieldState()
 	g.refreshTrayMenu()
 }
 
@@ -1038,6 +1593,67 @@ func (g *GUI) refreshButtons() {
 	}
 	g.connectButton.Enable()
 	g.disconnectButton.Disable()
+}
+
+func (g *GUI) updateRuntimeFieldState() {
+	p, ok := g.currentProfile()
+	if !ok || g.nameEntry == nil || g.nameEntry.Disabled() {
+		return
+	}
+	locked := g.runtimeLocked(p)
+	restartWidgets := []fyne.Disableable{
+		g.kindSelect,
+		g.hostEntry,
+		g.portEntry,
+		g.configEntry,
+		g.tsHostname,
+		g.tsControlURL,
+		g.tsEphemeral,
+	}
+	for _, w := range restartWidgets {
+		if w == nil {
+			continue
+		}
+		if locked {
+			w.Disable()
+		} else {
+			w.Enable()
+		}
+	}
+
+	g.updateTailscaleAuthControlState(p.TailscaleConfig)
+	authKeyLocked := locked || p.TailscaleConfig.Authenticated
+	if g.tsAuthKey != nil {
+		if authKeyLocked {
+			g.tsAuthKey.Disable()
+		} else {
+			g.tsAuthKey.Enable()
+		}
+	}
+	if g.tsLoginButton != nil {
+		if locked {
+			g.tsLoginButton.Disable()
+		} else {
+			g.tsLoginButton.Enable()
+		}
+	}
+
+	exitNodeLocked := g.statuses[p.ID] == "starting" || g.statuses[p.ID] == "stopping"
+	for _, w := range []fyne.Disableable{g.tsAutoExit, g.tsAllowLAN} {
+		if w == nil {
+			continue
+		}
+		if exitNodeLocked {
+			w.Disable()
+		} else {
+			w.Enable()
+		}
+	}
+	if exitNodeLocked {
+		g.setExitNodeControlsEnabled(false)
+		return
+	}
+	g.updateExitNodeControlState()
 }
 
 func (g *GUI) currentProfile() (profile.Profile, bool) {
@@ -1108,14 +1724,39 @@ func runtimeLockedStatus(status string) bool {
 func runtimeConfigChanged(before, after profile.Profile) bool {
 	before.Normalize()
 	after.Normalize()
-	return before.WireGuardConfig != after.WireGuardConfig || before.BindAddress() != after.BindAddress()
+	return before.Kind != after.Kind ||
+		before.WireGuardConfig != after.WireGuardConfig ||
+		tailscaleRestartConfigChanged(before.TailscaleConfig, after.TailscaleConfig) ||
+		before.BindAddress() != after.BindAddress()
+}
+
+func tailscaleRestartConfigChanged(before, after profile.TailscaleConfig) bool {
+	before.Normalize()
+	after.Normalize()
+	return before.Hostname != after.Hostname ||
+		before.AuthKey != after.AuthKey ||
+		before.ControlURL != after.ControlURL ||
+		before.Ephemeral != after.Ephemeral
+}
+
+func tailscaleExitNodeConfigChanged(before, after profile.Profile) bool {
+	before.Normalize()
+	after.Normalize()
+	if !before.IsTailscale() || !after.IsTailscale() {
+		return false
+	}
+	return before.TailscaleConfig.ExitNode != after.TailscaleConfig.ExitNode ||
+		before.TailscaleConfig.AutoExitNode != after.TailscaleConfig.AutoExitNode ||
+		before.TailscaleConfig.ExitNodeAllowLANAccess != after.TailscaleConfig.ExitNodeAllowLANAccess
 }
 
 func profileFieldsChanged(before, after profile.Profile) bool {
 	before.Normalize()
 	after.Normalize()
-	return before.Name != after.Name ||
+	return before.Kind != after.Kind ||
+		before.Name != after.Name ||
 		before.WireGuardConfig != after.WireGuardConfig ||
+		before.TailscaleConfig != after.TailscaleConfig ||
 		before.SocksHost != after.SocksHost ||
 		before.SocksPort != after.SocksPort ||
 		before.AutoStart != after.AutoStart

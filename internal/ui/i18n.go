@@ -9,8 +9,10 @@ import (
 
 	"fyne.io/fyne/v2"
 
-	"github.com/NRngnl/wireproxy-gui/internal/profile"
-	"github.com/NRngnl/wireproxy-gui/internal/wireproxy"
+	"example.com/wireproxy-gui/internal/connection"
+	"example.com/wireproxy-gui/internal/profile"
+	tailscalerunner "example.com/wireproxy-gui/internal/tailscale"
+	"example.com/wireproxy-gui/internal/wireproxy"
 )
 
 //go:embed translations/*.json
@@ -104,6 +106,11 @@ func localizedStructuredText(text string) (string, bool) {
 			"Address": address,
 		}), true
 	}
+	if url, ok := strings.CutPrefix(text, "Tailscale login required: open "); ok {
+		return tr("Tailscale login required: open {{.URL}}", map[string]any{
+			"URL": url,
+		}), true
+	}
 	if rest, ok := strings.CutPrefix(text, "listen SOCKS5 on "); ok {
 		address, message, ok := strings.Cut(rest, ": ")
 		if ok {
@@ -118,6 +125,21 @@ func localizedStructuredText(text string) (string, bool) {
 			"Message": localizedTextLine(message),
 		}), true
 	}
+	if message, ok := strings.CutPrefix(text, "start embedded Tailscale node: "); ok {
+		return tr("start embedded Tailscale node: {{.Message}}", map[string]any{
+			"Message": localizedTextLine(message),
+		}), true
+	}
+	if message, ok := strings.CutPrefix(text, "configure Tailscale exit node: "); ok {
+		return tr("configure Tailscale exit node: {{.Message}}", map[string]any{
+			"Message": localizedTextLine(message),
+		}), true
+	}
+	if message, ok := strings.CutPrefix(text, "update Tailscale exit node: "); ok {
+		return tr("update Tailscale exit node: {{.Message}}", map[string]any{
+			"Message": localizedTextLine(message),
+		}), true
+	}
 	if message, ok := strings.CutPrefix(text, "load profiles: "); ok {
 		return tr("load profiles: {{.Message}}", map[string]any{
 			"Message": localizedTextLine(message),
@@ -125,6 +147,16 @@ func localizedStructuredText(text string) (string, bool) {
 	}
 	if message, ok := strings.CutPrefix(text, "save imported profiles: "); ok {
 		return tr("save imported profiles: {{.Message}}", map[string]any{
+			"Message": localizedTextLine(message),
+		}), true
+	}
+	if message, ok := strings.CutPrefix(text, "save authenticated Tailscale profile: "); ok {
+		return tr("save authenticated Tailscale profile: {{.Message}}", map[string]any{
+			"Message": localizedTextLine(message),
+		}), true
+	}
+	if message, ok := strings.CutPrefix(text, "restore Tailscale authentication state: "); ok {
+		return tr("restore Tailscale authentication state: {{.Message}}", map[string]any{
 			"Message": localizedTextLine(message),
 		}), true
 	}
@@ -176,18 +208,26 @@ var localizableErrors = []struct {
 	err error
 }{
 	{err: errRuntimeProfileEdit},
+	{err: errRuntimeExitNodeEdit},
 	{err: profile.ErrProfileNameRequired},
 	{err: profile.ErrSocksHostRequired},
 	{err: profile.ErrSocksPortNotNumber},
 	{err: profile.ErrSocksPortOutOfRange},
+	{err: profile.ErrBackendKindInvalid},
 	{err: profile.ErrWireGuardConfigMissing},
 	{err: profile.ErrWireGuardConfigEmpty},
+	{err: profile.ErrTailscaleExitNodeMode},
 	{err: profile.ErrImportFileEmpty},
 	{err: profile.ErrImportJSONInvalid},
 	{err: profile.ErrImportProfilesEmpty},
 	{err: profile.ErrDuplicateBindAddress},
+	{err: connection.ErrExitNodesUnavailable},
 	{err: wireproxy.ErrAlreadyConnected},
 	{err: wireproxy.ErrConfigInvalid},
 	{err: wireproxy.ErrSocks5Missing},
+	{err: tailscalerunner.ErrAlreadyConnected},
+	{err: tailscalerunner.ErrNotTailscale},
+	{err: tailscalerunner.ErrNotRunning},
+	{err: tailscalerunner.ErrInvalidProfileID},
 	{err: errNativeFileDialogUnavailable},
 }

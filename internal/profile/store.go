@@ -112,6 +112,17 @@ func EncodeBundle(profiles []Profile) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
+func EncodeExportBundle(profiles []Profile) ([]byte, error) {
+	exported := append([]Profile(nil), profiles...)
+	for i := range exported {
+		exported[i].Normalize()
+		if exported[i].IsTailscale() {
+			exported[i].TailscaleConfig.Authenticated = false
+		}
+	}
+	return EncodeBundle(exported)
+}
+
 func DecodeImport(fileName string, data []byte) ([]Profile, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {
@@ -192,5 +203,10 @@ func importProfilesOrEmpty(profiles []Profile) ([]Profile, error) {
 }
 
 func hasImportProfileContent(p Profile) bool {
-	return strings.TrimSpace(p.Name) != "" || strings.TrimSpace(p.WireGuardConfig) != ""
+	if strings.TrimSpace(p.Name) != "" || strings.TrimSpace(p.WireGuardConfig) != "" {
+		return true
+	}
+	p.TailscaleConfig.Normalize()
+	p.TailscaleConfig.Authenticated = false
+	return p.IsTailscale() && (p.TailscaleConfig != TailscaleConfig{})
 }

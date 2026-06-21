@@ -11,10 +11,10 @@ import (
 
 const sampleWG = `[Interface]
 Address = 10.2.0.2/32
-PrivateKey = private
+PrivateKey = placeholder-interface-value
 
 [Peer]
-PublicKey = public
+PublicKey = placeholder-peer-value
 Endpoint = example.com:51820
 AllowedIPs = 0.0.0.0/0
 `
@@ -36,10 +36,10 @@ func TestWireproxyConfigReplacesSocks5Section(t *testing.T) {
 
 func TestWireGuardAddressReadsInterfaceAddress(t *testing.T) {
 	config := `[Peer]
-PublicKey = ignored
+PublicKey = placeholder-peer-value
 
 [Interface]
-PrivateKey = private
+PrivateKey = placeholder-interface-value
 Address = 10.8.0.2/32, fd00::2/128 # client tunnel IPs
 `
 
@@ -51,7 +51,7 @@ Address = 10.8.0.2/32, fd00::2/128 # client tunnel IPs
 }
 
 func TestWireGuardAddressFallback(t *testing.T) {
-	got := WireGuardAddress("[Interface]\nPrivateKey = private\n")
+	got := WireGuardAddress("[Interface]\nPrivateKey = placeholder-interface-value\n")
 	if got != "not configured" {
 		t.Fatalf("WireGuardAddress() = %q, want not configured", got)
 	}
@@ -77,6 +77,26 @@ func TestNormalizePreservesExistingTimestamps(t *testing.T) {
 	}
 	if !p.UpdatedAt.Equal(updated) {
 		t.Fatalf("Normalize changed UpdatedAt: got %s want %s", p.UpdatedAt, updated)
+	}
+}
+
+func TestNormalizeReplacesUnsafeProfileID(t *testing.T) {
+	for _, unsafeID := range []string{"../outside", `..\outside`, ".", ".."} {
+		t.Run(unsafeID, func(t *testing.T) {
+			p := Profile{
+				ID:              unsafeID,
+				Name:            "demo",
+				WireGuardConfig: sampleWG,
+				SocksHost:       DefaultSocksHost,
+				SocksPort:       DefaultSocksPort,
+			}
+
+			p.Normalize()
+
+			if p.ID == unsafeID || p.ID == "." || p.ID == ".." || strings.ContainsAny(p.ID, `/\`) {
+				t.Fatalf("normalized unsafe ID %q to %q", unsafeID, p.ID)
+			}
+		})
 	}
 }
 
@@ -171,6 +191,133 @@ func TestDecodeImportAcceptsExportedDraftProfile(t *testing.T) {
 	}
 }
 
+func TestLegacyProfileDefaultsToWireGuard(t *testing.T) {
+	var p Profile
+	err := json.Unmarshal([]byte(`{
+		"id":"legacy",
+		"name":"legacy",
+		"wireguard_config":"`+strings.ReplaceAll(sampleWG, "\n", `\n`)+`",
+		"socks_host":"127.0.0.1",
+		"socks_port":1080
+	}`), &p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p.Normalize()
+
+	if !p.IsWireGuard() || p.Kind != BackendWireGuard {
+		t.Fatalf("legacy profile kind = %q, want WireGuard", p.Kind)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTailscaleProfileValidatesWithoutWireGuardConfig(t *testing.T) {
+	p := NewTailscale("tailnet", 1080)
+
+	if !p.IsTailscale() {
+		t.Fatalf("profile kind = %q, want Tailscale", p.Kind)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTailscaleProfileRejectsAutomaticAndSpecificExitNode(t *testing.T) {
+	p := NewTailscale("tailnet", 1080)
+	p.TailscaleConfig.AutoExitNode = true
+	p.TailscaleConfig.ExitNode = "exit-a"
+
+	err := p.Validate()
+	if !errors.Is(err, ErrTailscaleExitNodeMode) {
+		t.Fatalf("expected ErrTailscaleExitNodeMode, got %v", err)
+	}
+}
+
+func TestTailscaleAuthenticatedProfileClearsAuthKeyOnNormalize(t *testing.T) {
+	p := NewTailscale("tailnet", 1080)
+	p.TailscaleConfig.Authenticated = true
+	p.TailscaleConfig.AuthKey = "tskey-auth-example"
+
+	p.Normalize()
+
+	if p.TailscaleConfig.AuthKey != "" {
+		t.Fatalf("authenticated profile auth key = %q, want empty", p.TailscaleConfig.AuthKey)
+	}
+}
+
+func TestEncodeExportBundleClearsTailscaleAuthenticatedState(t *testing.T) {
+	p := NewTailscale("tailnet", 1080)
+	p.TailscaleConfig.Authenticated = true
+	p.TailscaleConfig.AuthKey = "tskey-auth-example"
+
+	data, err := EncodeExportBundle([]Profile{p})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var bundle Bundle
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Profiles) != 1 {
+		t.Fatalf("exported profile count = %d, want 1", len(bundle.Profiles))
+	}
+	if bundle.Profiles[0].TailscaleConfig.Authenticated {
+		t.Fatal("exported Tailscale profile should not include authenticated state")
+	}
+	if bundle.Profiles[0].TailscaleConfig.AuthKey != "" {
+		t.Fatalf("exported authenticated auth key = %q, want empty", bundle.Profiles[0].TailscaleConfig.AuthKey)
+	}
+}
+
+func TestDecodeImportAcceptsExportedTailscaleProfile(t *testing.T) {
+	want := NewTailscale("tailnet", 1080)
+	want.TailscaleConfig.Hostname = "wireproxy-gui"
+	data, err := EncodeBundle([]Profile{want})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := DecodeImport("profiles.json", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].IsTailscale() || got[0].TailscaleConfig.Hostname != "wireproxy-gui" {
+		t.Fatalf("unexpected profiles: %#v", got)
+	}
+}
+
+func TestPrepareImportedClearsTailscaleAuthenticatedState(t *testing.T) {
+	imported := NewTailscale("tailnet", 1080)
+	imported.TailscaleConfig.Authenticated = true
+	imported.TailscaleConfig.AuthKey = "tskey-auth-example"
+
+	got := PrepareImported([]Profile{imported}, nil)
+
+	if len(got) != 1 {
+		t.Fatalf("expected one imported profile, got %#v", got)
+	}
+	if got[0].TailscaleConfig.Authenticated {
+		t.Fatal("imported profile should not stay authenticated because tsnet state is not imported")
+	}
+	if got[0].TailscaleConfig.AuthKey != "" {
+		t.Fatalf("imported authenticated profile auth key = %q, want empty", got[0].TailscaleConfig.AuthKey)
+	}
+}
+
+func TestDecodeImportRejectsAuthenticatedOnlyTailscaleProfile(t *testing.T) {
+	_, err := DecodeImport("profiles.json", []byte(`{
+		"kind":"tailscale",
+		"tailscale_config":{"authenticated":true}
+	}`))
+	if !errors.Is(err, ErrImportProfilesEmpty) {
+		t.Fatalf("expected ErrImportProfilesEmpty, got %v", err)
+	}
+}
+
 func TestDecodeImportAcceptsWireGuardConfig(t *testing.T) {
 	got, err := DecodeImport("demo.conf", []byte(sampleWG))
 	if err != nil {
@@ -184,10 +331,10 @@ func TestDecodeImportAcceptsWireGuardConfig(t *testing.T) {
 func TestWireGuardConfigAllowsPeerWithoutEndpoint(t *testing.T) {
 	config := `[Interface]
 Address = 10.2.0.1/32
-PrivateKey = private
+PrivateKey = placeholder-interface-value
 
 [Peer]
-	PublicKey = public
+	PublicKey = placeholder-peer-value
 	AllowedIPs = 10.2.0.2/32
 	`
 	err := ValidateWireGuardConfig(config)

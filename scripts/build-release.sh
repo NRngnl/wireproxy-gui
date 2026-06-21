@@ -3,8 +3,8 @@ set -euo pipefail
 
 app_name="Wireproxy GUI"
 binary_name="wireproxy-gui"
-bundle_id="com.github.nrngnl.wireproxy-gui"
-module_path="github.com/NRngnl/wireproxy-gui"
+bundle_id="com.example.wireproxy-gui"
+module_path="example.com/wireproxy-gui"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"

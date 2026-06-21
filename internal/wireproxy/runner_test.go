@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NRngnl/wireproxy-gui/internal/profile"
+	"example.com/wireproxy-gui/internal/profile"
 	upstream "github.com/windtf/wireproxy"
 )
 
@@ -137,6 +137,26 @@ func TestStopCancelsProfileDuringStartup(t *testing.T) {
 	if runner.Running(p.ID) {
 		t.Fatal("profile should not remain running after canceled startup")
 	}
+}
+
+func TestStopAfterWireGuardStartBeforeStartedDoesNotEmitStarted(t *testing.T) {
+	runner := newTestRunner()
+	p := profile.New("race", sampleConfig(t), 18087)
+	runner.startWireguard = func(_ *upstream.Configuration, _ int) (*upstream.VirtualTun, error) {
+		if !runner.Stop(p.ID) {
+			t.Fatal("expected Stop to cancel reserved profile")
+		}
+		return &upstream.VirtualTun{}, nil
+	}
+
+	err := runner.Start(context.Background(), p)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if runner.Running(p.ID) {
+		t.Fatal("profile should not remain running after canceled startup")
+	}
+	assertNoStartedEvent(t, runner.Events())
 }
 
 func TestStopAllAndWaitWaitsForServeShutdown(t *testing.T) {
@@ -270,4 +290,18 @@ func (l *fakeListener) Close() error {
 
 func (l *fakeListener) Addr() net.Addr {
 	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}
+}
+
+func assertNoStartedEvent(t *testing.T, events <-chan Event) {
+	t.Helper()
+	for {
+		select {
+		case event := <-events:
+			if event.Type == EventStarted {
+				t.Fatalf("unexpected started event: %#v", event)
+			}
+		default:
+			return
+		}
+	}
 }

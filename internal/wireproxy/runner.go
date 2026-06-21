@@ -9,7 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NRngnl/wireproxy-gui/internal/profile"
+	"example.com/wireproxy-gui/internal/connection"
+	"example.com/wireproxy-gui/internal/profile"
 	socks5 "github.com/things-go/go-socks5"
 	"github.com/things-go/go-socks5/bufferpool"
 	upstream "github.com/windtf/wireproxy"
@@ -22,22 +23,16 @@ var (
 	ErrSocks5Missing    = errors.New("wireproxy config does not contain a SOCKS5 listener")
 )
 
-type EventType string
+type EventType = connection.EventType
 
 const (
-	EventLog     EventType = "log"
-	EventStarted EventType = "started"
-	EventStopped EventType = "stopped"
-	EventError   EventType = "error"
+	EventLog     = connection.EventLog
+	EventStarted = connection.EventStarted
+	EventStopped = connection.EventStopped
+	EventError   = connection.EventError
 )
 
-type Event struct {
-	Type        EventType
-	ProfileID   string
-	ProfileName string
-	Message     string
-	At          time.Time
-}
+type Event = connection.Event
 
 type Runner struct {
 	events chan Event
@@ -83,6 +78,18 @@ func (r *Runner) Running(profileID string) bool {
 	defer r.mu.Unlock()
 	_, ok := r.procs[profileID]
 	return ok
+}
+
+func (r *Runner) ExitNodes(context.Context, string) ([]connection.ExitNode, error) {
+	return nil, connection.ErrExitNodesUnavailable
+}
+
+func (r *Runner) UpdateExitNode(context.Context, string, profile.TailscaleConfig) error {
+	return connection.ErrExitNodesUnavailable
+}
+
+func (r *Runner) Logout(context.Context, string) error {
+	return connection.ErrExitNodesUnavailable
 }
 
 func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
@@ -139,13 +146,18 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	if err != nil {
 		return fmt.Errorf("start embedded WireGuard engine: %w", err)
 	}
-	proc.setTun(tun)
+	if !proc.setTun(tun) {
+		return context.Canceled
+	}
 
 	err = procCtx.Err()
 	if err != nil {
 		return err
 	}
 
+	if !proc.commitStart() {
+		return context.Canceled
+	}
 	started = true
 	r.emit(EventStarted, p, "connected on "+p.BindAddress())
 
@@ -264,7 +276,7 @@ func (p *process) setListener(listener net.Listener) {
 	}
 }
 
-func (p *process) setTun(tun *upstream.VirtualTun) {
+func (p *process) setTun(tun *upstream.VirtualTun) bool {
 	p.mu.Lock()
 	closed := p.closed
 	if !closed {
@@ -273,7 +285,15 @@ func (p *process) setTun(tun *upstream.VirtualTun) {
 	p.mu.Unlock()
 	if closed {
 		closeTun(tun)
+		return false
 	}
+	return true
+}
+
+func (p *process) commitStart() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.closed
 }
 
 func (p *process) close() {
@@ -333,7 +353,7 @@ func findSocks5Config(conf *upstream.Configuration) (*upstream.Socks5Config, err
 }
 
 func (r *Runner) emit(eventType EventType, p profile.Profile, message string) {
-	event := Event{
+	event := connection.Event{
 		Type:        eventType,
 		ProfileID:   p.ID,
 		ProfileName: p.Name,
