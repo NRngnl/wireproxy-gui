@@ -73,6 +73,43 @@ dist/Wireproxy GUI.app
 That bundle is generated outside Git and is ignored by the repository. To install
 it on macOS, copy the `.app` bundle into `/Applications` or run it in place.
 
+## Release Builds
+
+The project version is stored in [VERSION](VERSION). Release builds inject the
+version, commit, and UTC build time into the binary.
+
+Build a release artifact for the native OS and architecture:
+
+```sh
+scripts/build-release.sh
+```
+
+Build a specific target when the host has the required native/cross CGO toolchain:
+
+```sh
+RELEASE_VERSION=0.1.0 GOOS=darwin GOARCH=arm64 scripts/build-release.sh
+```
+
+Artifacts are written to:
+
+```text
+dist/release/artifacts/
+```
+
+The macOS release artifact is a zipped `.app` bundle. Linux releases are
+`.tar.gz` archives. Windows releases are `.zip` archives. Each artifact gets a
+neighboring `.sha256` checksum file.
+
+GitHub Actions builds releases automatically when a version tag such as `0.1.0`
+or `v0.1.0` is pushed. The release workflow runs on Ubuntu only and uses
+`fyne-cross` containers to cross-compile Linux and Windows for amd64 and
+aarch64/arm64.
+
+macOS release artifacts are intentionally not built in CI. Build them locally on
+macOS with `scripts/build-release.sh`, or pass `GOOS=darwin GOARCH=arm64` or
+`GOOS=darwin GOARCH=amd64` when using a host with the required macOS CGO
+toolchain.
+
 ## Test And Lint
 
 ```sh

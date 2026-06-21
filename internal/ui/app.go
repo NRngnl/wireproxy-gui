@@ -19,6 +19,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/NRngnl/wireproxy-gui/internal/buildinfo"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
 	"github.com/NRngnl/wireproxy-gui/internal/wireproxy"
 )
@@ -156,7 +157,7 @@ func (g *GUI) load() error {
 }
 
 func (g *GUI) build() {
-	g.window = g.app.NewWindow(tr("Wireproxy GUI"))
+	g.window = g.app.NewWindow(tr(buildinfo.WindowTitle()))
 	g.window.Resize(fyne.NewSize(1120, 760))
 
 	g.nameEntry = widget.NewEntry()
