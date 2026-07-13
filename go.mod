@@ -3,7 +3,7 @@ module github.com/NRngnl/wireproxy-gui
 go 1.26.4
 
 require (
-	fyne.io/fyne/v2 v2.7.4
+	fyne.io/fyne/v2 v2.8.0
 	github.com/ncruces/zenity v0.10.14
 	github.com/things-go/go-socks5 v0.1.1
 	github.com/windtf/wireproxy v1.1.2
@@ -13,12 +13,15 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
-	fyne.io/systray v1.12.1 // indirect
-	github.com/BurntSushi/toml v1.5.0 // indirect
+	fyne.io/systray v1.12.2 // indirect
+	github.com/BurntSushi/toml v1.6.0 // indirect
+	github.com/FyshOS/fancyfs v0.0.1 // indirect
 	github.com/MakeNowJust/heredoc/v2 v2.0.1 // indirect
 	github.com/akavel/rsrc v0.10.2 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa // indirect
+	github.com/anthonynsimon/bild v0.14.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
 	github.com/creachadair/msync v0.7.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -27,18 +30,18 @@ require (
 	github.com/fredbi/uri v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
-	github.com/fyne-io/gl-js v0.2.0 // indirect
-	github.com/fyne-io/glfw-js v0.3.0 // indirect
+	github.com/fyne-io/gl-js v0.2.1-0.20260315212741-029c47fd27e8 // indirect
+	github.com/fyne-io/glfw-js v0.4.0 // indirect
 	github.com/fyne-io/image v0.1.1 // indirect
 	github.com/fyne-io/oksvg v0.2.0 // indirect
 	github.com/gaissmai/bart v0.26.1 // indirect
-	github.com/go-gl/gl v0.0.0-20231021071112-07e5d0ea2e71 // indirect
-	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20240506104042-037f3cc74f2a // indirect
+	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276 // indirect
+	github.com/go-gl/glfw/v3.4/glfw v0.1.0-pre.1.0.20260707082822-2a407d02d01a // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 // indirect
 	github.com/go-text/render v0.2.1 // indirect
 	github.com/go-text/typesetting v0.3.4 // indirect
-	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
@@ -47,11 +50,11 @@ require (
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/jeandeaual/go-locale v0.0.0-20250612000132-0ef82f21eade // indirect
-	github.com/josephspurrier/goversioninfo v1.4.1 // indirect
+	github.com/josephspurrier/goversioninfo v1.7.0 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.0 // indirect
 	github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
-	github.com/mattn/go-runewidth v0.0.17 // indirect
+	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
 	github.com/mdlayher/socket v0.5.0 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
@@ -60,7 +63,6 @@ require (
 	github.com/pires/go-proxyproto v0.8.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/randall77/makefat v0.0.0-20210315173500-7ddd0e42c844 // indirect
-	github.com/rivo/uniseg v0.4.4 // indirect
 	github.com/rymdport/portal v0.4.2 // indirect
 	github.com/safchain/ethtool v0.3.0 // indirect
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect
@@ -73,7 +75,7 @@ require (
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976 // indirect
 	github.com/tailscale/wireguard-go v0.0.0-20260527010701-b48af7099cad // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	github.com/yuin/goldmark v1.7.8 // indirect
+	github.com/yuin/goldmark v1.8.2 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/crypto v0.52.0 // indirect
