@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -25,19 +29,8 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Install Linux GUI build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc libgl1-mesa-dev pkg-config xorg-dev
-
       - name: Test
-        run: go test -race -count=1 ./...
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Build
-        run: go build -trimpath ./cmd/wireproxy-gui
+        run: go test -race -tags=ci -count=1 ./...
 
   lint:
     name: Lint
@@ -56,4 +49,25 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
-          args: --max-issues-per-linter=0 --max-same-issues=0
+          args: --build-tags=ci --max-issues-per-linter=0 --max-same-issues=0
+
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install Linux GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libgl1-mesa-dev pkg-config xorg-dev
+
+      - name: Build
+        run: go build -trimpath ./cmd/wireproxy-gui
