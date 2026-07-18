@@ -13,7 +13,7 @@ import (
 func TestStartDispatchesByProfileBackend(t *testing.T) {
 	wireguard := newTestBackend()
 	tailscale := newTestBackend()
-	runner := NewWithBackends(wireguard, tailscale)
+	runner := New(wireguard, tailscale)
 	wireguardProfile := profile.Profile{ID: "wg", Kind: profile.BackendWireGuard, Name: "wg"}
 	tailscaleProfile := profile.NewTailscale("tailnet", 1081)
 
@@ -35,7 +35,7 @@ func TestStartDispatchesByProfileBackend(t *testing.T) {
 }
 
 func TestStartRejectsUnknownBackend(t *testing.T) {
-	runner := NewWithBackends(newTestBackend(), newTestBackend())
+	runner := New(newTestBackend(), newTestBackend())
 	p := profile.Profile{ID: "bad", Kind: "bad", Name: "bad"}
 
 	err := runner.Start(context.Background(), p)
@@ -47,7 +47,7 @@ func TestStartRejectsUnknownBackend(t *testing.T) {
 func TestStopUsesStartedBackend(t *testing.T) {
 	wireguard := newTestBackend()
 	tailscale := newTestBackend()
-	runner := NewWithBackends(wireguard, tailscale)
+	runner := New(wireguard, tailscale)
 	p := profile.NewTailscale("tailnet", 1081)
 
 	err := runner.Start(context.Background(), p)
@@ -70,7 +70,7 @@ func TestExitNodesUsesStartedTailscaleBackend(t *testing.T) {
 	wireguard := newTestBackend()
 	tailscale := newTestBackend()
 	tailscale.exitNodes = []connection.ExitNode{{ID: "stable-exit", Name: "exit-a"}}
-	runner := NewWithBackends(wireguard, tailscale)
+	runner := New(wireguard, tailscale)
 	p := profile.NewTailscale("tailnet", 1081)
 
 	err := runner.Start(context.Background(), p)
@@ -96,7 +96,7 @@ func TestExitNodesUsesStartedTailscaleBackend(t *testing.T) {
 func TestUpdateExitNodeUsesStartedTailscaleBackend(t *testing.T) {
 	wireguard := newTestBackend()
 	tailscale := newTestBackend()
-	runner := NewWithBackends(wireguard, tailscale)
+	runner := New(wireguard, tailscale)
 	p := profile.NewTailscale("tailnet", 1081)
 
 	err := runner.Start(context.Background(), p)
@@ -125,7 +125,7 @@ func TestUpdateExitNodeUsesStartedTailscaleBackend(t *testing.T) {
 func TestLogoutUsesTailscaleBackendWhenProfileIsStopped(t *testing.T) {
 	wireguard := newTestBackend()
 	tailscale := newTestBackend()
-	runner := NewWithBackends(wireguard, tailscale)
+	runner := New(wireguard, tailscale)
 
 	err := runner.Logout(context.Background(), "tailnet-profile")
 	if err != nil {
@@ -141,7 +141,7 @@ func TestLogoutUsesTailscaleBackendWhenProfileIsStopped(t *testing.T) {
 }
 
 func TestExitNodesWithoutRunningTailscaleBackendReturnsUnavailable(t *testing.T) {
-	runner := NewWithBackends(newTestBackend(), newTestBackend())
+	runner := New(newTestBackend(), newTestBackend())
 
 	_, err := runner.ExitNodes(context.Background(), "missing")
 	if !errors.Is(err, connection.ErrExitNodesUnavailable) {
@@ -159,7 +159,7 @@ func TestStoppedEventDuringStartDoesNotLeaveStaleBacking(t *testing.T) {
 		Type:      connection.EventStopped,
 		ProfileID: p.ID,
 	}
-	runner := NewWithBackends(wireguard, tailscale)
+	runner := New(wireguard, tailscale)
 
 	errCh := make(chan error, 1)
 	go func() {
