@@ -23,10 +23,11 @@ import (
 )
 
 var (
-	ErrAlreadyConnected = errors.New("profile is already connected")
-	ErrNotTailscale     = errors.New("profile is not a Tailscale profile")
-	ErrNotRunning       = errors.New("Tailscale profile is not connected")
-	ErrInvalidProfileID = errors.New("invalid Tailscale profile ID")
+	ErrAlreadyConnected = connection.ErrAlreadyConnected
+	ErrNotTailscale     = connection.ErrNotTailscale
+	ErrNotRunning       = connection.ErrNotRunning
+	ErrInvalidProfileID = connection.ErrInvalidProfileID
+	errCloseNode        = errors.New("close embedded Tailscale node")
 )
 
 type Event = connection.Event
@@ -125,7 +126,7 @@ func (n *realNode) Dial(ctx context.Context, network, address string) (net.Conn,
 func (n *realNode) Close() (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("close embedded Tailscale node: %v", recovered)
+			err = fmt.Errorf("%w: %v", errCloseNode, recovered)
 		}
 	}()
 	return n.server.Close()
@@ -198,7 +199,8 @@ func (r *Runner) ExitNodes(ctx context.Context, profileID string) ([]connection.
 
 func (r *Runner) UpdateExitNode(ctx context.Context, profileID string, cfg profile.TailscaleConfig) error {
 	cfg.Normalize()
-	if err := cfg.Validate(); err != nil {
+	err := cfg.Validate()
+	if err != nil {
 		return err
 	}
 
@@ -227,7 +229,8 @@ func (r *Runner) Logout(ctx context.Context, profileID string) error {
 	if running {
 		return ErrAlreadyConnected
 	}
-	if err := ctx.Err(); err != nil {
+	err = ctx.Err()
+	if err != nil {
 		return err
 	}
 	return os.RemoveAll(statePath)

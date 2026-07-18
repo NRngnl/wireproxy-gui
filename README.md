@@ -252,11 +252,19 @@ stop before process exit continues.
 ## Project Layout
 
 ```text
-cmd/wireproxy-gui/      Application entry point
-internal/profile/       Profile model, validation, storage, import/export
-internal/ui/            Fyne GUI, tray integration, localization
-internal/wireproxy/     Embedded wireproxy runner and shutdown handling
+cmd/wireproxy-gui/      Composition root and executable entry point
+internal/profile/       Profile domain model, invariants, and policies
+internal/connection/    Connection-domain events and values
+internal/application/   Use cases and repository/runtime ports
+internal/profilejson/   JSON persistence and transfer adapter
+internal/ui/            Fyne presentation adapter and localization
+internal/runner/        Runtime adapter dispatcher
+internal/wireproxy/     Embedded WireGuard/wireproxy adapter
+internal/tailscale/     Embedded Tailscale/tsnet adapter
 ```
+
+See [docs/architecture.md](docs/architecture.md) for the dependency direction
+and layer boundaries.
 
 ## License
 

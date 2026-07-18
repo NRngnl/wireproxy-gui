@@ -2,13 +2,11 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -19,14 +17,13 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/NRngnl/wireproxy-gui/internal/application"
 	"github.com/NRngnl/wireproxy-gui/internal/buildinfo"
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
-	"github.com/NRngnl/wireproxy-gui/internal/runner"
 )
 
 const (
-	maxLogLines         = 1000
 	shutdownWaitTimeout = 5 * time.Second
 	configEditorMinRows = 3
 )
@@ -44,9 +41,6 @@ var usageGuideParagraphs = []string{
 	"Closing the window hides it when tray support is available. Use Quit from the tray menu to stop all profiles, wait briefly for them to close, and exit.",
 }
 
-var errRuntimeProfileEdit = errors.New("disconnect the profile, and wait for it to finish disconnecting, before changing its backend, SOCKS5 bind address, WireGuard config, or Tailscale auth settings")
-var errRuntimeExitNodeEdit = errors.New("wait until the Tailscale profile is connected or disconnected before changing exit-node settings")
-
 var runOnUI = fyne.Do
 
 var (
@@ -60,22 +54,15 @@ var (
 type GUI struct {
 	app    fyne.App
 	window fyne.Window
-	store  *profile.Store
-	runner profileRunner
+	core   Application
 	ctx    context.Context
 	cancel context.CancelFunc
 	files  profileFileDialog
 	tray   desktop.App
 
-	shutdownOnce sync.Once
-
-	profiles     []profile.Profile
-	selectedID   string
-	statuses     map[string]string
-	logs         map[string][]string
-	logTails     map[string]bool
-	logOffsets   map[string]fyne.Position
-	startCancels map[string]context.CancelFunc
+	selectedID string
+	logTails   map[string]bool
+	logOffsets map[string]fyne.Position
 
 	list           *widget.List
 	kindSelect     *widget.Select
@@ -108,21 +95,35 @@ type GUI struct {
 	exportButton     *widget.Button
 }
 
+// Application is the inbound application boundary consumed by the Fyne adapter.
+// Implementations own profile state and business rules; GUI owns widget state only.
+type Application interface {
+	Changes() <-chan application.Change
+	Profiles() []profile.Profile
+	Profile(string) (profile.Profile, bool)
+	Status(string) application.Status
+	Logs(string) []application.LogEntry
+	RuntimeLocked(string) bool
+	Add(string) (profile.Profile, error)
+	Save(profile.Profile) (application.SaveResult, error)
+	Delete(string) error
+	Import(string, []byte) ([]profile.Profile, error)
+	Export([]string) ([]byte, error)
+	Connect(string) error
+	Login(string) error
+	ConnectAll() error
+	AutoConnect() error
+	Disconnect(string) bool
+	DisconnectFromTray(string) bool
+	DisconnectAll()
+	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
+	Logout(context.Context, string) error
+	Shutdown(context.Context) error
+}
+
 type profileFileDialog interface {
 	OpenProfilePath() (string, error)
 	SaveProfilesPath(fileName string) (string, error)
-}
-
-type profileRunner interface {
-	Events() <-chan connection.Event
-	Running(profileID string) bool
-	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
-	UpdateExitNode(context.Context, string, profile.TailscaleConfig) error
-	Logout(context.Context, string) error
-	Start(context.Context, profile.Profile) error
-	Stop(profileID string) bool
-	StopAll()
-	StopAllAndWait(context.Context) error
 }
 
 type displayError string
@@ -131,29 +132,22 @@ func (e displayError) Error() string {
 	return string(e)
 }
 
-func Run() {
+func Run(core Application, loadErr error) {
 	fyneApp := app.NewWithID("com.github.nrngnl.wireproxy-gui")
 	applyAppTheme(fyneApp)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	storePath, err := profile.DefaultStorePath()
-	if err != nil {
-		storePath = filepath.Join(".", "profiles.json")
-	}
-
 	gui := &GUI{
-		app:          fyneApp,
-		store:        profile.NewStore(storePath),
-		runner:       runner.New(),
-		ctx:          ctx,
-		cancel:       cancel,
-		files:        nativeProfileFileDialog{},
-		statuses:     map[string]string{},
-		logs:         map[string][]string{},
-		startCancels: map[string]context.CancelFunc{},
+		app:    fyneApp,
+		core:   core,
+		ctx:    ctx,
+		cancel: cancel,
+		files:  nativeProfileFileDialog{},
 	}
-
-	loadErr := gui.load()
+	profiles := core.Profiles()
+	if len(profiles) > 0 {
+		gui.selectedID = profiles[0].ID
+	}
 	gui.build()
 	gui.events()
 	if loadErr != nil {
@@ -163,21 +157,6 @@ func Run() {
 	gui.installTray()
 	defer gui.shutdown()
 	gui.window.ShowAndRun()
-}
-
-func (g *GUI) load() error {
-	profiles, err := g.store.Load()
-	if err != nil {
-		return err
-	}
-	g.profiles = profiles
-	for _, p := range g.profiles {
-		g.statuses[p.ID] = "stopped"
-	}
-	if len(g.profiles) > 0 {
-		g.selectedID = g.profiles[0].ID
-	}
-	return nil
 }
 
 func (g *GUI) build() {
@@ -207,13 +186,14 @@ func (g *GUI) build() {
 	g.exportButton = widget.NewButtonWithIcon(tr("Export"), theme.UploadIcon(), g.exportSelected)
 
 	g.list = widget.NewList(
-		func() int { return len(g.profiles) },
+		func() int { return len(g.core.Profiles()) },
 		newProfileListItem,
 		g.updateProfileListItem,
 	)
 	g.list.OnSelected = func(id widget.ListItemID) {
-		if id >= 0 && id < len(g.profiles) {
-			g.selectedID = g.profiles[id].ID
+		profiles := g.core.Profiles()
+		if id >= 0 && id < len(profiles) {
+			g.selectedID = profiles[id].ID
 			g.showSelected()
 		}
 	}
@@ -260,7 +240,7 @@ func (g *GUI) build() {
 	g.window.SetContent(split)
 
 	g.showSelected()
-	if len(g.profiles) > 0 {
+	if len(g.core.Profiles()) > 0 {
 		g.list.Select(0)
 	}
 }
@@ -284,7 +264,7 @@ func (g *GUI) setupTailscaleForm() {
 	g.tsExitNode = widget.NewSelectEntry(nil)
 	g.tsExitNode.PlaceHolder = tr("Refresh to choose a device, or type a node/IP")
 	g.tsExitRefresh = widget.NewButtonWithIcon(tr("Refresh"), theme.ViewRefreshIcon(), g.refreshExitNodeOptions)
-	g.tsAutoExit = widget.NewCheck(tr("Use automatic exit node"), func(checked bool) {
+	g.tsAutoExit = widget.NewCheck(tr("Use automatic exit node"), func(_ bool) {
 		g.updateExitNodeControlState()
 	})
 	g.tsAllowLAN = widget.NewCheck(tr("Allow LAN access while using exit node"), nil)
@@ -413,9 +393,6 @@ func (g *GUI) setExitNodeControlsEnabled(enabled bool) {
 }
 
 func (g *GUI) refreshExitNodeOptions() {
-	if g.runner == nil {
-		return
-	}
 	p, ok := g.currentProfile()
 	if !ok || !p.IsTailscale() {
 		return
@@ -426,17 +403,13 @@ func (g *GUI) refreshExitNodeOptions() {
 		ctx = context.Background()
 	}
 	go func() {
-		nodes, err := g.runner.ExitNodes(ctx, profileID)
+		nodes, err := g.core.ExitNodes(ctx, profileID)
 		runOnUI(func() {
 			if err != nil {
 				g.showError("Refresh exit nodes", err)
 				return
 			}
 			g.applyExitNodeOptions(nodes)
-			if len(nodes) == 0 {
-				g.appendLog(profileID, time.Now(), "no Tailscale exit nodes found")
-				g.refresh()
-			}
 		})
 	}()
 }
@@ -558,14 +531,15 @@ func (g *GUI) updateProfileListItem(id widget.ListItemID, obj fyne.CanvasObject)
 	if !ok {
 		return
 	}
-	if id < 0 || id >= len(g.profiles) {
+	profiles := g.core.Profiles()
+	if id < 0 || id >= len(profiles) {
 		statusIcon.SetResource(disconnectedTrayIcon)
 		name.SetText("")
 		bind.SetText("")
 		return
 	}
 
-	p := g.profiles[id]
+	p := profiles[id]
 	statusIcon.SetResource(trayStatusIcon(g.profileStatus(p.ID)))
 	name.SetText(p.Name)
 	bind.SetText(tr("SOCKS5 {{.Address}}", map[string]any{
@@ -581,11 +555,6 @@ func profileListItemViews(obj fyne.CanvasObject) (statusIcon *widget.Icon, name,
 		return nil, nil, nil, false
 	}
 	return icons[0], labels[0], labels[1], true
-}
-
-func profileListItemLabels(obj fyne.CanvasObject) (name, bind *widget.Label, ok bool) {
-	_, name, bind, ok = profileListItemViews(obj)
-	return name, bind, ok
 }
 
 func collectProfileListItemViews(obj fyne.CanvasObject, icons *[]*widget.Icon, labels *[]*widget.Label) {
@@ -705,9 +674,10 @@ func (g *GUI) trayMenu() *fyne.Menu {
 			})
 		}),
 	}
-	if len(g.profiles) > 0 {
+	profiles := g.core.Profiles()
+	if len(profiles) > 0 {
 		items = append(items, fyne.NewMenuItemSeparator())
-		for _, p := range g.profiles {
+		for _, p := range profiles {
 			items = append(items, g.profileTrayMenuItem(p))
 		}
 	}
@@ -781,16 +751,7 @@ func (g *GUI) refreshTrayMenu() {
 }
 
 func (g *GUI) profileStatus(profileID string) string {
-	status := g.statuses[profileID]
-	if status == "" {
-		status = "stopped"
-	}
-	if g.runner != nil {
-		if g.runner.Running(profileID) && status != "stopping" {
-			return "running"
-		}
-	}
-	return status
+	return string(g.core.Status(profileID))
 }
 
 func trayStatusConnected(status string) bool {
@@ -838,7 +799,7 @@ func statusSummaryText(p profile.Profile, status string) string {
 
 func wireGuardAddressText(p profile.Profile) string {
 	address := p.WireGuardAddress()
-	if address == "not configured" {
+	if strings.TrimSpace(address) == "" {
 		return tr("not configured")
 	}
 	return address
@@ -857,96 +818,76 @@ func profileNetworkDetailText(p profile.Profile) string {
 
 func (g *GUI) events() {
 	go func() {
-		events := g.runner.Events()
+		changes := g.core.Changes()
 		for {
 			select {
 			case <-g.ctx.Done():
 				return
-			case ev, ok := <-events:
+			case change, ok := <-changes:
 				if !ok {
 					return
 				}
 				runOnUI(func() {
-					g.handleEvent(ev)
+					g.handleChange(change)
 				})
 			}
 		}
 	}()
 }
 
-func (g *GUI) handleEvent(ev connection.Event) {
-	if !g.hasProfile(ev.ProfileID) {
-		return
-	}
-	switch ev.Type {
-	case connection.EventStarted:
-		g.statuses[ev.ProfileID] = "running"
-	case connection.EventStopped:
-		g.statuses[ev.ProfileID] = "stopped"
-	case connection.EventError:
-		g.statuses[ev.ProfileID] = "error"
-	}
-	g.appendLog(ev.ProfileID, ev.At, ev.Message)
-	if ev.Type == connection.EventStarted {
-		g.markTailscaleAuthenticated(ev.ProfileID)
-	}
+func (g *GUI) handleChange(change application.Change) {
 	g.refresh()
-	if ev.Type == connection.EventStarted && ev.ProfileID == g.selectedID {
-		if p, ok := g.profileByID(ev.ProfileID); ok && p.IsTailscale() {
+	if change.Err != nil {
+		if title := operationErrorTitle(change.Operation); title != "" {
+			g.showError(title, change.Err)
+		}
+	}
+	if change.RuntimeEvent == connection.EventStarted && change.ProfileID == g.selectedID {
+		if p, ok := g.profileByID(change.ProfileID); ok && p.IsTailscale() {
 			g.refreshExitNodeOptions()
 		}
 	}
 }
 
-func (g *GUI) startAutoProfiles() {
-	profiles := make([]profile.Profile, 0, len(g.profiles))
-	for _, p := range g.profiles {
-		if !p.AutoStart {
-			continue
-		}
-		profiles = append(profiles, p)
+func operationErrorTitle(operation application.Operation) string {
+	switch operation {
+	case application.OperationConnect:
+		return "Connect profile"
+	case application.OperationConnectAll:
+		return "Connect All"
+	case application.OperationLogin:
+		return "Login to Tailscale"
+	case application.OperationSave:
+		return "Save profile"
+	default:
+		return ""
 	}
-	err := duplicateBindError(profiles)
-	if err != nil {
-		for _, p := range profiles {
-			g.statuses[p.ID] = "error"
-			g.appendLog(p.ID, time.Now(), err.Error())
-		}
-		g.refresh()
-		return
-	}
+}
 
-	for _, p := range profiles {
-		_ = g.startProfile(p)
-	}
+func (g *GUI) startAutoProfiles() {
+	_ = g.core.AutoConnect()
 	g.refresh()
 }
 
 func (g *GUI) shutdown() {
-	g.shutdownOnce.Do(func() {
-		if g.cancel != nil {
-			g.cancel()
-		}
-		if g.runner != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), shutdownWaitTimeout)
-			err := g.runner.StopAllAndWait(ctx)
-			cancel()
-			if err != nil {
-				fyne.LogError(tr("Error stopping profiles during shutdown"), err)
-			}
-		}
-	})
+	if g.cancel != nil {
+		g.cancel()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownWaitTimeout)
+	err := g.core.Shutdown(ctx)
+	cancel()
+	if err != nil {
+		fyne.LogError(tr("Error stopping profiles during shutdown"), err)
+	}
 }
 
 func (g *GUI) addProfile() {
-	p := profile.New(tr("New profile"), "", profile.NextAvailablePort(g.profiles))
-	g.profiles = append(g.profiles, p)
-	g.statuses[p.ID] = "stopped"
-	g.selectedID = p.ID
-	err := g.saveAll()
+	p, err := g.core.Add(tr("New profile"))
 	if err != nil {
 		g.showError("Save profile", err)
+		return
 	}
+	g.selectedID = p.ID
 	g.refresh()
 	g.selectByID(p.ID)
 }
@@ -971,22 +912,12 @@ func (g *GUI) importProfilesFromPath(path string) error {
 	if err != nil {
 		return err
 	}
-	imported, err := profile.DecodeImport(filepath.Base(path), data)
+	imported, err := g.core.Import(filepath.Base(path), data)
 	if err != nil {
 		return err
 	}
-	imported = profile.PrepareImported(imported, g.profiles)
-	for _, p := range imported {
-		g.profiles = append(g.profiles, p)
-		g.statuses[p.ID] = "stopped"
-		g.appendLog(p.ID, time.Now(), "imported profile")
-	}
 	if len(imported) > 0 {
 		g.selectedID = imported[0].ID
-	}
-	err = g.saveAll()
-	if err != nil {
-		return fmt.Errorf("save imported profiles: %w", err)
 	}
 	g.refresh()
 	g.selectByID(g.selectedID)
@@ -1002,10 +933,11 @@ func (g *GUI) exportSelected() {
 }
 
 func (g *GUI) exportAll() {
-	if len(g.profiles) == 0 {
+	profiles := g.core.Profiles()
+	if len(profiles) == 0 {
 		return
 	}
-	g.exportProfiles(g.profiles, "wireproxy-profiles.json")
+	g.exportProfiles(profiles, "wireproxy-profiles.json")
 }
 
 func (g *GUI) exportProfiles(profiles []profile.Profile, fileName string) {
@@ -1017,18 +949,21 @@ func (g *GUI) exportProfiles(profiles []profile.Profile, fileName string) {
 	if path == "" {
 		return
 	}
-	err = exportProfilesToPath(profiles, path)
+	profileIDs := make([]string, 0, len(profiles))
+	for _, item := range profiles {
+		profileIDs = append(profileIDs, item.ID)
+	}
+	data, err := g.core.Export(profileIDs)
+	if err == nil {
+		err = exportProfilesToPath(data, path)
+	}
 	if err != nil {
 		g.showError("Export profiles", err)
 	}
 }
 
-func exportProfilesToPath(profiles []profile.Profile, path string) error {
-	data, err := profile.EncodeExportBundle(profiles)
-	if err != nil {
-		return err
-	}
-	err = os.WriteFile(path, data, 0o600)
+func exportProfilesToPath(data []byte, path string) error {
+	err := os.WriteFile(path, data, 0o600)
 	if err != nil {
 		return err
 	}
@@ -1043,89 +978,43 @@ func (g *GUI) saveSelected() {
 }
 
 func (g *GUI) saveSelectedProfile() error {
-	idx := g.selectedIndex()
-	if idx < 0 {
+	existing, ok := g.currentProfile()
+	if !ok {
 		return nil
 	}
-	existing := g.profiles[idx]
 	p, err := g.profileFromForm(existing)
 	if err != nil {
 		return err
 	}
-	if g.runtimeLocked(existing) && runtimeConfigChanged(existing, p) {
-		return errRuntimeProfileEdit
-	}
-	exitNodeChanged := tailscaleExitNodeConfigChanged(existing, p)
-	applyExitNode := exitNodeChanged && g.canUpdateRuntimeExitNode(existing)
-	if g.runtimeLocked(existing) && exitNodeChanged && !applyExitNode {
-		return errRuntimeExitNodeEdit
-	}
-	if !profileFieldsChanged(existing, p) {
-		return nil
-	}
-	if applyExitNode {
-		err = g.updateRunningExitNode(p)
-		if err != nil {
-			return err
-		}
-	}
-	p.Touch()
-	g.profiles[idx] = p
-	err = g.saveAll()
+	_, err = g.core.Save(p)
 	if err != nil {
 		return err
 	}
 	g.selectedID = p.ID
-	logMessage := "saved profile"
-	if applyExitNode {
-		logMessage = "updated Tailscale exit-node settings"
-	}
-	g.appendLog(p.ID, time.Now(), logMessage)
 	g.refresh()
 	return nil
 }
 
-func (g *GUI) canUpdateRuntimeExitNode(p profile.Profile) bool {
-	return p.IsTailscale() && g.runner.Running(p.ID) && g.statuses[p.ID] == "running"
-}
-
-func (g *GUI) updateRunningExitNode(p profile.Profile) error {
-	ctx := g.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	err := g.runner.UpdateExitNode(ctx, p.ID, p.TailscaleConfig)
-	if err != nil {
-		return fmt.Errorf("update Tailscale exit node: %w", err)
-	}
-	return nil
-}
-
 func (g *GUI) deleteSelected() {
-	idx := g.selectedIndex()
-	if idx < 0 {
+	p, ok := g.currentProfile()
+	if !ok {
 		return
 	}
-	p := g.profiles[idx]
 	dialog.ShowConfirm(tr("Delete profile"), tr("Delete {{.Name}}?", map[string]any{"Name": p.Name}), func(ok bool) {
 		if !ok {
 			return
 		}
-		g.cancelStartingProfile(p.ID)
-		g.runner.Stop(p.ID)
-		g.profiles = append(g.profiles[:idx], g.profiles[idx+1:]...)
-		delete(g.statuses, p.ID)
-		delete(g.logs, p.ID)
-		delete(g.logTails, p.ID)
-		delete(g.logOffsets, p.ID)
-		g.selectedID = ""
-		if len(g.profiles) > 0 {
-			g.selectedID = g.profiles[0].ID
-		}
-		err := g.saveAll()
+		err := g.core.Delete(p.ID)
 		if err != nil {
 			g.showError("Delete profile", err)
 			return
+		}
+		delete(g.logTails, p.ID)
+		delete(g.logOffsets, p.ID)
+		g.selectedID = ""
+		profiles := g.core.Profiles()
+		if len(profiles) > 0 {
+			g.selectedID = profiles[0].ID
 		}
 		g.refresh()
 		g.selectByID(g.selectedID)
@@ -1142,12 +1031,7 @@ func (g *GUI) connectSelected() {
 	if !ok {
 		return
 	}
-	err = g.runningBindConflict(p)
-	if err != nil {
-		g.showError("Connect profile", err)
-		return
-	}
-	err = g.startProfile(p, "Connect profile")
+	err = g.core.Connect(p.ID)
 	if err != nil {
 		g.showError("Connect profile", err)
 	}
@@ -1176,57 +1060,31 @@ func (g *GUI) loginTailscaleSelected() {
 		g.showError("Login to Tailscale", displayError("select a Tailscale profile before login"))
 		return
 	}
-	err = g.runningBindConflict(p)
-	if err != nil {
-		g.showError("Login to Tailscale", err)
-		return
-	}
-	err = g.startProfile(p, "Login to Tailscale")
+	err = g.core.Login(p.ID)
 	if err != nil {
 		g.showError("Login to Tailscale", err)
 	}
 }
 
 func (g *GUI) logoutTailscaleSelected() {
-	idx := g.selectedIndex()
-	if idx < 0 {
+	p, ok := g.currentProfile()
+	if !ok {
 		return
 	}
-	p := g.profiles[idx]
 	if !p.IsTailscale() {
 		g.showError("Logout from Tailscale", displayError("select a Tailscale profile before logout"))
-		return
-	}
-	if g.runtimeLocked(p) {
-		g.showError("Logout from Tailscale", errRuntimeProfileEdit)
-		return
-	}
-	updated := p
-	updated.TailscaleConfig.AuthKey = ""
-	updated.TailscaleConfig.Authenticated = false
-	updated.Touch()
-	g.profiles[idx] = updated
-	err := g.saveAll()
-	if err != nil {
-		g.profiles[idx] = p
-		g.showError("Logout from Tailscale", err)
 		return
 	}
 	ctx := g.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	err = g.runner.Logout(ctx, p.ID)
+	err := g.core.Logout(ctx, p.ID)
 	if err != nil {
-		g.profiles[idx] = p
-		if restoreErr := g.saveAll(); restoreErr != nil {
-			err = errors.Join(err, fmt.Errorf("restore Tailscale authentication state: %w", restoreErr))
-		}
 		g.showError("Logout from Tailscale", err)
 		return
 	}
 	g.selectedID = p.ID
-	g.appendLog(p.ID, time.Now(), "logged out of Tailscale")
 	g.refresh()
 	g.showSelected()
 }
@@ -1236,12 +1094,7 @@ func (g *GUI) disconnectSelected() {
 	if !ok {
 		return
 	}
-	canceling := g.cancelStartingProfile(p.ID)
-	if !g.runner.Stop(p.ID) && !canceling {
-		g.statuses[p.ID] = "stopped"
-	} else {
-		g.statuses[p.ID] = "stopping"
-	}
+	g.core.Disconnect(p.ID)
 	g.refresh()
 }
 
@@ -1251,157 +1104,15 @@ func (g *GUI) connectAll() {
 		g.showError("Connect All", err)
 		return
 	}
-	err = duplicateBindError(g.profiles)
+	err = g.core.ConnectAll()
 	if err != nil {
 		g.showError("Connect All", err)
-		return
-	}
-
-	var errs []error
-	for _, p := range g.profiles {
-		err = g.startProfile(p, "Connect All")
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", p.Name, err))
-		}
-	}
-	if len(errs) > 0 {
-		g.showError("Connect All", errors.Join(errs...))
 	}
 }
 
 func (g *GUI) disconnectAll() {
-	for _, p := range g.profiles {
-		g.cancelStartingProfile(p.ID)
-	}
-	g.runner.StopAll()
-	for _, p := range g.profiles {
-		if g.runner.Running(p.ID) || runtimeLockedStatus(g.statuses[p.ID]) {
-			g.statuses[p.ID] = "stopping"
-		}
-	}
+	g.core.DisconnectAll()
 	g.refresh()
-}
-
-func (g *GUI) startProfile(p profile.Profile, errorTitle ...string) error {
-	if g.runner.Running(p.ID) || runtimeLockedStatus(g.statuses[p.ID]) {
-		return nil
-	}
-	g.statuses[p.ID] = "starting"
-	g.appendLog(p.ID, time.Now(), "connecting profile")
-	g.refresh()
-	ctx := g.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	startCtx, cancel := context.WithCancel(ctx)
-	if g.startCancels == nil {
-		g.startCancels = map[string]context.CancelFunc{}
-	}
-	g.startCancels[p.ID] = cancel
-	title := ""
-	if len(errorTitle) > 0 {
-		title = errorTitle[0]
-	}
-	go g.startProfileRuntime(startCtx, p, title)
-	return nil
-}
-
-func (g *GUI) startProfileRuntime(ctx context.Context, p profile.Profile, errorTitle string) {
-	err := g.runner.Start(ctx, p)
-	runOnUI(func() {
-		g.finishProfileStart(p, errorTitle, err)
-	})
-}
-
-func (g *GUI) finishProfileStart(p profile.Profile, errorTitle string, err error) {
-	g.clearStartCancel(p.ID, err != nil)
-	if !g.hasProfile(p.ID) {
-		return
-	}
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			if runtimeLockedStatus(g.statuses[p.ID]) {
-				g.statuses[p.ID] = "stopped"
-				g.appendLog(p.ID, time.Now(), "disconnected")
-				g.refresh()
-			}
-			return
-		}
-		g.statuses[p.ID] = "error"
-		g.appendLog(p.ID, time.Now(), err.Error())
-		g.refresh()
-		if errorTitle != "" {
-			g.showError(errorTitle, err)
-		}
-		return
-	}
-	if g.statuses[p.ID] == "starting" {
-		g.statuses[p.ID] = "running"
-		g.markTailscaleAuthenticated(p.ID)
-		g.refresh()
-	}
-}
-
-func (g *GUI) markTailscaleAuthenticated(profileID string) {
-	idx := -1
-	for i, p := range g.profiles {
-		if p.ID == profileID {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		return
-	}
-	p := g.profiles[idx]
-	if !p.IsTailscale() {
-		return
-	}
-	if p.TailscaleConfig.Authenticated && p.TailscaleConfig.AuthKey == "" {
-		return
-	}
-	updated := p
-	updated.TailscaleConfig.AuthKey = ""
-	updated.TailscaleConfig.Authenticated = true
-	updated.Touch()
-	g.profiles[idx] = updated
-	err := g.saveAll()
-	if err != nil {
-		g.profiles[idx] = p
-		g.appendLog(profileID, time.Now(), "save authenticated Tailscale profile: "+err.Error())
-		g.showError("Save profile", err)
-		return
-	}
-	g.appendLog(profileID, time.Now(), "Tailscale authenticated; auth key removed from saved profile")
-	if profileID == g.selectedID {
-		g.tsAuthKey.SetText("")
-		g.updateTailscaleAuthControlState(updated.TailscaleConfig)
-	}
-}
-
-func (g *GUI) cancelStartingProfile(profileID string) bool {
-	if g.startCancels == nil {
-		return false
-	}
-	cancel, ok := g.startCancels[profileID]
-	if !ok {
-		return false
-	}
-	cancel()
-	return true
-}
-
-func (g *GUI) clearStartCancel(profileID string, cancelContext bool) {
-	if g.startCancels == nil {
-		return
-	}
-	cancel, ok := g.startCancels[profileID]
-	if ok {
-		if cancelContext {
-			cancel()
-		}
-		delete(g.startCancels, profileID)
-	}
 }
 
 func (g *GUI) connectProfileFromTray(profileID string) {
@@ -1409,29 +1120,18 @@ func (g *GUI) connectProfileFromTray(profileID string) {
 	if !ok {
 		return
 	}
-	err := g.runningBindConflict(p)
-	if err != nil {
-		g.showError("Connect profile", err)
-		return
-	}
-	err = g.startProfile(p, "Connect profile")
+	err := g.core.Connect(p.ID)
 	if err != nil {
 		g.showError("Connect profile", err)
 	}
 }
 
 func (g *GUI) disconnectProfileFromTray(profileID string) {
-	p, ok := g.profileByID(profileID)
+	_, ok := g.profileByID(profileID)
 	if !ok {
 		return
 	}
-	canceling := g.cancelStartingProfile(profileID)
-	if !g.runner.Stop(profileID) && !canceling {
-		g.statuses[profileID] = "stopped"
-	} else {
-		g.statuses[profileID] = "stopping"
-	}
-	g.appendLog(p.ID, time.Now(), "disconnect requested from tray")
+	g.core.DisconnectFromTray(profileID)
 	g.refresh()
 }
 
@@ -1484,10 +1184,6 @@ func (g *GUI) profileFromForm(existing profile.Profile) (profile.Profile, error)
 	return existing, existing.Validate()
 }
 
-func (g *GUI) saveAll() error {
-	return g.store.Save(g.profiles)
-}
-
 func (g *GUI) profileFileDialog() profileFileDialog {
 	if g.files != nil {
 		return g.files
@@ -1512,7 +1208,10 @@ func (g *GUI) showSelected() {
 		return
 	}
 
-	p := g.profiles[idx]
+	p, ok := g.currentProfile()
+	if !ok {
+		return
+	}
 	g.setFormEnabled(true)
 	g.kindSelect.SetSelected(backendKindLabel(p.Kind))
 	g.nameEntry.SetText(p.Name)
@@ -1523,7 +1222,7 @@ func (g *GUI) showSelected() {
 	g.setTailscaleForm(p.TailscaleConfig)
 	g.updateBackendVisibility(p.Kind)
 	g.statusLabel.SetText(statusSummaryText(p, g.profileStatus(p.ID)))
-	g.setLogText(strings.Join(g.logs[p.ID], "\n"), false)
+	g.setLogText(profileLogText(g.core.Logs(p.ID)), false)
 	g.refreshButtons()
 	g.updateRuntimeFieldState()
 }
@@ -1568,11 +1267,9 @@ func (g *GUI) refresh() {
 	}
 	g.refreshButtons()
 	if g.selectedID != "" {
-		idx := g.selectedIndex()
-		if idx >= 0 {
-			p := g.profiles[idx]
+		if p, ok := g.currentProfile(); ok {
 			g.statusLabel.SetText(statusSummaryText(p, g.profileStatus(p.ID)))
-			g.setLogText(strings.Join(g.logs[p.ID], "\n"), false)
+			g.setLogText(profileLogText(g.core.Logs(p.ID)), false)
 		}
 	}
 	g.updateRuntimeFieldState()
@@ -1584,8 +1281,11 @@ func (g *GUI) refreshButtons() {
 	if idx < 0 {
 		return
 	}
-	p := g.profiles[idx]
-	locked := g.runner.Running(p.ID) || runtimeLockedStatus(g.statuses[p.ID])
+	p, ok := g.currentProfile()
+	if !ok {
+		return
+	}
+	locked := g.core.RuntimeLocked(p.ID)
 	if locked {
 		g.connectButton.Disable()
 		g.disconnectButton.Enable()
@@ -1600,7 +1300,7 @@ func (g *GUI) updateRuntimeFieldState() {
 	if !ok || g.nameEntry == nil || g.nameEntry.Disabled() {
 		return
 	}
-	locked := g.runtimeLocked(p)
+	locked := g.core.RuntimeLocked(p.ID)
 	restartWidgets := []fyne.Disableable{
 		g.kindSelect,
 		g.hostEntry,
@@ -1638,7 +1338,8 @@ func (g *GUI) updateRuntimeFieldState() {
 		}
 	}
 
-	exitNodeLocked := g.statuses[p.ID] == "starting" || g.statuses[p.ID] == "stopping"
+	status := g.core.Status(p.ID)
+	exitNodeLocked := status == application.StatusStarting || status == application.StatusStopping
 	for _, w := range []fyne.Disableable{g.tsAutoExit, g.tsAllowLAN} {
 		if w == nil {
 			continue
@@ -1657,24 +1358,15 @@ func (g *GUI) updateRuntimeFieldState() {
 }
 
 func (g *GUI) currentProfile() (profile.Profile, bool) {
-	idx := g.selectedIndex()
-	if idx < 0 {
-		return profile.Profile{}, false
-	}
-	return g.profiles[idx], true
+	return g.core.Profile(g.selectedID)
 }
 
 func (g *GUI) profileByID(profileID string) (profile.Profile, bool) {
-	for _, p := range g.profiles {
-		if p.ID == profileID {
-			return p, true
-		}
-	}
-	return profile.Profile{}, false
+	return g.core.Profile(profileID)
 }
 
 func (g *GUI) selectedIndex() int {
-	for i, p := range g.profiles {
+	for i, p := range g.core.Profiles() {
 		if p.ID == g.selectedID {
 			return i
 		}
@@ -1682,96 +1374,8 @@ func (g *GUI) selectedIndex() int {
 	return -1
 }
 
-func (g *GUI) hasProfile(profileID string) bool {
-	for _, p := range g.profiles {
-		if p.ID == profileID {
-			return true
-		}
-	}
-	return false
-}
-
-func (g *GUI) runningBindConflict(candidate profile.Profile) error {
-	for _, p := range g.profiles {
-		if p.ID == candidate.ID || p.BindAddress() != candidate.BindAddress() {
-			continue
-		}
-		if g.runner.Running(p.ID) || runtimeLockedStatus(g.statuses[p.ID]) {
-			return fmt.Errorf(
-				"%w: %s is already used by active profile %q",
-				profile.ErrDuplicateBindAddress,
-				candidate.BindAddress(),
-				p.Name,
-			)
-		}
-	}
-	return nil
-}
-
-func (g *GUI) runtimeLocked(p profile.Profile) bool {
-	return g.runner.Running(p.ID) || runtimeLockedStatus(g.statuses[p.ID])
-}
-
-func runtimeLockedStatus(status string) bool {
-	switch status {
-	case "starting", "running", "stopping":
-		return true
-	default:
-		return false
-	}
-}
-
-func runtimeConfigChanged(before, after profile.Profile) bool {
-	before.Normalize()
-	after.Normalize()
-	return before.Kind != after.Kind ||
-		before.WireGuardConfig != after.WireGuardConfig ||
-		tailscaleRestartConfigChanged(before.TailscaleConfig, after.TailscaleConfig) ||
-		before.BindAddress() != after.BindAddress()
-}
-
-func tailscaleRestartConfigChanged(before, after profile.TailscaleConfig) bool {
-	before.Normalize()
-	after.Normalize()
-	return before.Hostname != after.Hostname ||
-		before.AuthKey != after.AuthKey ||
-		before.ControlURL != after.ControlURL ||
-		before.Ephemeral != after.Ephemeral
-}
-
-func tailscaleExitNodeConfigChanged(before, after profile.Profile) bool {
-	before.Normalize()
-	after.Normalize()
-	if !before.IsTailscale() || !after.IsTailscale() {
-		return false
-	}
-	return before.TailscaleConfig.ExitNode != after.TailscaleConfig.ExitNode ||
-		before.TailscaleConfig.AutoExitNode != after.TailscaleConfig.AutoExitNode ||
-		before.TailscaleConfig.ExitNodeAllowLANAccess != after.TailscaleConfig.ExitNodeAllowLANAccess
-}
-
-func profileFieldsChanged(before, after profile.Profile) bool {
-	before.Normalize()
-	after.Normalize()
-	return before.Kind != after.Kind ||
-		before.Name != after.Name ||
-		before.WireGuardConfig != after.WireGuardConfig ||
-		before.TailscaleConfig != after.TailscaleConfig ||
-		before.SocksHost != after.SocksHost ||
-		before.SocksPort != after.SocksPort ||
-		before.AutoStart != after.AutoStart
-}
-
-func duplicateBindError(profiles []profile.Profile) error {
-	bind, first, second, ok := profile.DuplicateBindAddress(profiles)
-	if !ok {
-		return nil
-	}
-	return fmt.Errorf("%w: %s is used by %q and %q", profile.ErrDuplicateBindAddress, bind, first, second)
-}
-
 func (g *GUI) selectByID(id string) {
-	for i, p := range g.profiles {
+	for i, p := range g.core.Profiles() {
 		if p.ID == id {
 			if g.list != nil {
 				g.list.Select(i)
@@ -1783,18 +1387,15 @@ func (g *GUI) selectByID(id string) {
 	g.showSelected()
 }
 
-func (g *GUI) appendLog(profileID string, at time.Time, message string) {
-	if strings.TrimSpace(message) == "" {
-		return
+func profileLogText(entries []application.LogEntry) string {
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Message) == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s", entry.At.Format("15:04:05"), localizedLogMessage(entry.Message)))
 	}
-	line := fmt.Sprintf("%s  %s", at.Format("15:04:05"), localizedLogMessage(message))
-	g.logs[profileID] = append(g.logs[profileID], line)
-	if len(g.logs[profileID]) > maxLogLines {
-		g.logs[profileID] = g.logs[profileID][len(g.logs[profileID])-maxLogLines:]
-	}
-	if profileID == g.selectedID {
-		g.setLogText(strings.Join(g.logs[profileID], "\n"), false)
-	}
+	return strings.Join(lines, "\n")
 }
 
 func (g *GUI) showError(title string, err error) {

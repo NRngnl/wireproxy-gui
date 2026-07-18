@@ -8,11 +8,10 @@ import (
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
-	"github.com/NRngnl/wireproxy-gui/internal/tailscale"
-	"github.com/NRngnl/wireproxy-gui/internal/wireproxy"
 )
 
-type backend interface {
+// Backend is the runtime-adapter contract used by the dispatcher.
+type Backend interface {
 	Events() <-chan connection.Event
 	Running(profileID string) bool
 	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
@@ -27,18 +26,14 @@ type backend interface {
 type Runner struct {
 	events chan connection.Event
 
-	wireguard backend
-	tailscale backend
+	wireguard Backend
+	tailscale Backend
 
 	mu      sync.Mutex
 	backing map[string]profile.BackendKind
 }
 
-func New() *Runner {
-	return NewWithBackends(wireproxy.NewRunner(), tailscale.NewRunner())
-}
-
-func NewWithBackends(wireguard, tailscale backend) *Runner {
+func New(wireguard, tailscale Backend) *Runner {
 	r := &Runner{
 		events:    make(chan connection.Event, 512),
 		wireguard: wireguard,
@@ -103,7 +98,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	r.mu.Lock()
 	if _, ok := r.backing[p.ID]; ok {
 		r.mu.Unlock()
-		return fmt.Errorf("%s: %w", p.Name, wireproxy.ErrAlreadyConnected)
+		return fmt.Errorf("%s: %w", p.Name, connection.ErrAlreadyConnected)
 	}
 	r.backing[p.ID] = kind
 	r.mu.Unlock()
@@ -141,7 +136,7 @@ func (r *Runner) StopAllAndWait(ctx context.Context) error {
 	)
 }
 
-func (r *Runner) backendFor(p profile.Profile) (backend, profile.BackendKind, error) {
+func (r *Runner) backendFor(p profile.Profile) (Backend, profile.BackendKind, error) {
 	switch {
 	case p.IsWireGuard():
 		return r.wireguard, profile.BackendWireGuard, nil
@@ -152,7 +147,7 @@ func (r *Runner) backendFor(p profile.Profile) (backend, profile.BackendKind, er
 	}
 }
 
-func (r *Runner) backendByKind(kind profile.BackendKind) backend {
+func (r *Runner) backendByKind(kind profile.BackendKind) Backend {
 	if kind == profile.BackendTailscale {
 		return r.tailscale
 	}
@@ -167,7 +162,7 @@ func (r *Runner) removeBacking(profileID string, kind profile.BackendKind) {
 	}
 }
 
-func (r *Runner) forward(kind profile.BackendKind, source backend) {
+func (r *Runner) forward(kind profile.BackendKind, source Backend) {
 	go func() {
 		for event := range source.Events() {
 			if event.Type == connection.EventStopped || event.Type == connection.EventError {

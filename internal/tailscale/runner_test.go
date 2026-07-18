@@ -22,7 +22,10 @@ import (
 	"tailscale.com/types/key"
 )
 
-var errTestUp = errors.New("up failed")
+var (
+	errTestUp         = errors.New("up failed")
+	errUnexpectedDial = errors.New("unexpected dial")
+)
 
 func TestStartRejectsWireGuardProfile(t *testing.T) {
 	runner := NewRunner()
@@ -236,26 +239,26 @@ func TestNewTSNetNodeUsesProfileConfiguration(t *testing.T) {
 		_ = node.Close()
 	})
 
-	real, ok := node.(*realNode)
+	actual, ok := node.(*realNode)
 	if !ok {
 		t.Fatalf("node = %T, want *realNode", node)
 	}
-	if got, want := real.server.Dir, filepath.Join(stateDir, p.ID); got != want {
+	if got, want := actual.server.Dir, filepath.Join(stateDir, p.ID); got != want {
 		t.Fatalf("Dir = %q, want %q", got, want)
 	}
-	if real.server.Hostname != "ts-host" {
-		t.Fatalf("Hostname = %q, want ts-host", real.server.Hostname)
+	if actual.server.Hostname != "ts-host" {
+		t.Fatalf("Hostname = %q, want ts-host", actual.server.Hostname)
 	}
-	if real.server.AuthKey != "auth" {
-		t.Fatalf("AuthKey = %q, want auth", real.server.AuthKey)
+	if actual.server.AuthKey != "auth" {
+		t.Fatalf("AuthKey = %q, want auth", actual.server.AuthKey)
 	}
-	if real.server.ControlURL != "https://control.example.com" {
-		t.Fatalf("ControlURL = %q, want https://control.example.com", real.server.ControlURL)
+	if actual.server.ControlURL != "https://control.example.com" {
+		t.Fatalf("ControlURL = %q, want https://control.example.com", actual.server.ControlURL)
 	}
-	if !real.server.Ephemeral {
+	if !actual.server.Ephemeral {
 		t.Fatal("Ephemeral should be true")
 	}
-	if real.server.UserLogf == nil {
+	if actual.server.UserLogf == nil {
 		t.Fatal("UserLogf should be set")
 	}
 }
@@ -271,9 +274,9 @@ func TestNewTSNetNodeDefaultsHostnameFromProfileName(t *testing.T) {
 		_ = node.Close()
 	})
 
-	real := node.(*realNode)
-	if real.server.Hostname != "tailnet" {
-		t.Fatalf("Hostname = %q, want tailnet", real.server.Hostname)
+	actual := node.(*realNode)
+	if actual.server.Hostname != "tailnet" {
+		t.Fatalf("Hostname = %q, want tailnet", actual.server.Hostname)
 	}
 }
 
@@ -672,10 +675,12 @@ func TestLogoutRemovesProfileStateDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
+	_, err = os.Stat(statePath)
+	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state directory should be removed, stat error = %v", err)
 	}
-	if _, err := os.Stat(runner.stateDir); err != nil {
+	_, err = os.Stat(runner.stateDir)
+	if err != nil {
 		t.Fatalf("state root should remain, stat error = %v", err)
 	}
 }
@@ -838,7 +843,7 @@ func (n *fakeTSNode) Dial(ctx context.Context, network, address string) (net.Con
 	if n.dialFunc != nil {
 		return n.dialFunc(ctx, network, address)
 	}
-	return nil, errors.New("unexpected dial")
+	return nil, errUnexpectedDial
 }
 
 func (n *fakeTSNode) Close() error {
@@ -864,7 +869,7 @@ func (c *fakeLocalClient) GetPrefs(context.Context) (*ipn.Prefs, error) {
 func (c *fakeLocalClient) EditPrefs(_ context.Context, prefs *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	copied := *prefs
 	c.edit = &copied
-	c.prefs = prefs.Prefs.Clone()
+	c.prefs = prefs.Clone()
 	if c.editFunc != nil {
 		c.editFunc()
 	}

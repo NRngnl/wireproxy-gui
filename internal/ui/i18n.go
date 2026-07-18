@@ -9,10 +9,9 @@ import (
 
 	"fyne.io/fyne/v2"
 
+	"github.com/NRngnl/wireproxy-gui/internal/application"
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
-	tailscalerunner "github.com/NRngnl/wireproxy-gui/internal/tailscale"
-	"github.com/NRngnl/wireproxy-gui/internal/wireproxy"
 )
 
 //go:embed translations/*.json
@@ -93,8 +92,13 @@ func localizedTextLine(text string) string {
 		return localized
 	}
 	for _, item := range localizableErrors {
-		if strings.Contains(text, item.err.Error()) {
-			text = strings.ReplaceAll(text, item.err.Error(), tr(item.err.Error()))
+		if strings.Contains(text, item.Error()) {
+			text = strings.ReplaceAll(text, item.Error(), tr(item.Error()))
+		}
+	}
+	for _, message := range localizableMessages {
+		if strings.Contains(text, message) {
+			text = strings.ReplaceAll(text, message, tr(message))
 		}
 	}
 	return tr(text)
@@ -165,7 +169,7 @@ func localizedStructuredText(text string) (string, bool) {
 			"Message": localizedTextLine(message),
 		}), true
 	}
-	if message, ok := strings.CutPrefix(text, wireproxy.ErrConfigInvalid.Error()+": "); ok {
+	if message, ok := strings.CutPrefix(text, "wireproxy config validation failed: "); ok {
 		return tr("wireproxy config validation failed: {{.Message}}", map[string]any{
 			"Message": localizedTextLine(message),
 		}), true
@@ -204,30 +208,32 @@ func localizedStructuredText(text string) (string, bool) {
 	return "", false
 }
 
-var localizableErrors = []struct {
-	err error
-}{
-	{err: errRuntimeProfileEdit},
-	{err: errRuntimeExitNodeEdit},
-	{err: profile.ErrProfileNameRequired},
-	{err: profile.ErrSocksHostRequired},
-	{err: profile.ErrSocksPortNotNumber},
-	{err: profile.ErrSocksPortOutOfRange},
-	{err: profile.ErrBackendKindInvalid},
-	{err: profile.ErrWireGuardConfigMissing},
-	{err: profile.ErrWireGuardConfigEmpty},
-	{err: profile.ErrTailscaleExitNodeMode},
-	{err: profile.ErrImportFileEmpty},
-	{err: profile.ErrImportJSONInvalid},
-	{err: profile.ErrImportProfilesEmpty},
-	{err: profile.ErrDuplicateBindAddress},
-	{err: connection.ErrExitNodesUnavailable},
-	{err: wireproxy.ErrAlreadyConnected},
-	{err: wireproxy.ErrConfigInvalid},
-	{err: wireproxy.ErrSocks5Missing},
-	{err: tailscalerunner.ErrAlreadyConnected},
-	{err: tailscalerunner.ErrNotTailscale},
-	{err: tailscalerunner.ErrNotRunning},
-	{err: tailscalerunner.ErrInvalidProfileID},
-	{err: errNativeFileDialogUnavailable},
+var localizableErrors = []error{
+	application.ErrRuntimeProfileEdit,
+	application.ErrRuntimeExitNodeEdit,
+	application.ErrImportFileEmpty,
+	application.ErrImportJSONInvalid,
+	application.ErrImportProfilesEmpty,
+	profile.ErrProfileNameRequired,
+	profile.ErrSocksHostRequired,
+	profile.ErrSocksPortNotNumber,
+	profile.ErrSocksPortOutOfRange,
+	profile.ErrBackendKindInvalid,
+	profile.ErrWireGuardConfigMissing,
+	profile.ErrWireGuardConfigEmpty,
+	profile.ErrTailscaleExitNodeMode,
+	profile.ErrDuplicateBindAddress,
+	connection.ErrAlreadyConnected,
+	connection.ErrExitNodesUnavailable,
+	connection.ErrNotTailscale,
+	connection.ErrNotRunning,
+	connection.ErrInvalidProfileID,
+	errNativeFileDialogUnavailable,
+}
+
+// Adapter-specific failures are localized by stable boundary text so the UI
+// does not import concrete runtime adapters.
+var localizableMessages = []string{
+	"wireproxy config validation failed",
+	"wireproxy config does not contain a SOCKS5 listener",
 }

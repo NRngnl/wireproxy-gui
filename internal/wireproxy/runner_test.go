@@ -28,6 +28,18 @@ AllowedIPs = 0.0.0.0/0
 `, ephemeralWireGuardKey(t), ephemeralWireGuardKey(t))
 }
 
+func TestWireproxyConfigReplacesSocks5Section(t *testing.T) {
+	item := profile.New("demo", sampleConfig(t)+"\n[Socks5]\nBindAddress = 127.0.0.1:9999\n", 1085)
+
+	got := wireproxyConfig(item)
+	if strings.Count(got, "[Socks5]") != 1 {
+		t.Fatalf("expected one Socks5 section, got:\n%s", got)
+	}
+	if !strings.Contains(got, "BindAddress = 127.0.0.1:1085") || strings.Contains(got, "9999") {
+		t.Fatalf("unexpected generated config:\n%s", got)
+	}
+}
+
 func ephemeralWireGuardKey(t *testing.T) string {
 	t.Helper()
 	var key [32]byte

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 )
 
 var (
-	ErrAlreadyConnected = errors.New("profile is already connected")
+	ErrAlreadyConnected = connection.ErrAlreadyConnected
 	ErrConfigInvalid    = errors.New("wireproxy config validation failed")
 	ErrSocks5Missing    = errors.New("wireproxy config does not contain a SOCKS5 listener")
 )
@@ -329,7 +330,7 @@ func parseProfileConfig(p profile.Profile) (*upstream.Configuration, error) {
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 
-	_, err = tmp.WriteString(p.WireproxyConfig())
+	_, err = tmp.WriteString(wireproxyConfig(p))
 	if err != nil {
 		_ = tmp.Close()
 		return nil, err
@@ -340,6 +341,29 @@ func parseProfileConfig(p profile.Profile) (*upstream.Configuration, error) {
 	}
 
 	return upstream.ParseConfig(tmpPath)
+}
+
+func wireproxyConfig(p profile.Profile) string {
+	base := stripSection(p.WireGuardConfig, "Socks5")
+	return fmt.Sprintf("%s\n\n[Socks5]\nBindAddress = %s\n", strings.TrimSpace(base), p.BindAddress())
+}
+
+func stripSection(text, sectionName string) string {
+	target := strings.ToLower(strings.TrimSpace(sectionName))
+	kept := make([]string, 0)
+	dropping := false
+	for line := range strings.SplitSeq(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.Contains(trimmed, "]") {
+			end := strings.Index(trimmed, "]")
+			current := strings.ToLower(strings.TrimSpace(trimmed[1:end]))
+			dropping = current == target
+		}
+		if !dropping {
+			kept = append(kept, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 func findSocks5Config(conf *upstream.Configuration) (*upstream.Socks5Config, error) {

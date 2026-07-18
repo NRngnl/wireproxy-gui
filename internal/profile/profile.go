@@ -31,35 +31,32 @@ var (
 	ErrBackendKindInvalid     = errors.New("profile backend must be WireGuard or Tailscale")
 	ErrWireGuardConfigMissing = errors.New("WireGuard config is missing required fields")
 	ErrWireGuardConfigEmpty   = errors.New("WireGuard config is required")
-	ErrTailscaleExitNodeMode  = errors.New("Tailscale exit node must be automatic or a specific node, not both")
-	ErrImportFileEmpty        = errors.New("import file is empty")
-	ErrImportJSONInvalid      = errors.New("import JSON is invalid")
-	ErrImportProfilesEmpty    = errors.New("import JSON does not contain any valid profiles")
+	ErrTailscaleExitNodeMode  = errors.New("tailscale exit node must be automatic or a specific node, not both")
 	ErrDuplicateBindAddress   = errors.New("duplicate SOCKS5 bind address")
 )
 
 type TailscaleConfig struct {
-	Hostname               string `json:"hostname,omitempty"`
-	AuthKey                string `json:"auth_key,omitempty"`
-	Authenticated          bool   `json:"authenticated,omitempty"`
-	ControlURL             string `json:"control_url,omitempty"`
-	ExitNode               string `json:"exit_node,omitempty"`
-	AutoExitNode           bool   `json:"auto_exit_node,omitempty"`
-	ExitNodeAllowLANAccess bool   `json:"exit_node_allow_lan_access,omitempty"`
-	Ephemeral              bool   `json:"ephemeral,omitempty"`
+	Hostname               string
+	AuthKey                string
+	Authenticated          bool
+	ControlURL             string
+	ExitNode               string
+	AutoExitNode           bool
+	ExitNodeAllowLANAccess bool
+	Ephemeral              bool
 }
 
 type Profile struct {
-	ID              string          `json:"id"`
-	Kind            BackendKind     `json:"kind,omitempty"`
-	Name            string          `json:"name"`
-	WireGuardConfig string          `json:"wireguard_config,omitempty"`
-	TailscaleConfig TailscaleConfig `json:"tailscale_config,omitempty"`
-	SocksHost       string          `json:"socks_host"`
-	SocksPort       int             `json:"socks_port"`
-	AutoStart       bool            `json:"auto_start"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	ID              string
+	Kind            BackendKind
+	Name            string
+	WireGuardConfig string
+	TailscaleConfig TailscaleConfig
+	SocksHost       string
+	SocksPort       int
+	AutoStart       bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 func New(name, wireGuardConfig string, socksPort int) Profile {
@@ -249,13 +246,7 @@ func WireGuardAddress(text string) string {
 			return value
 		}
 	}
-	return "not configured"
-}
-
-func (p Profile) WireproxyConfig() string {
-	base := stripSection(p.WireGuardConfig, "Socks5")
-	base = strings.TrimSpace(base)
-	return fmt.Sprintf("%s\n\n[Socks5]\nBindAddress = %s\n", base, p.BindAddress())
+	return ""
 }
 
 func ValidateWireGuardConfig(text string) error {
@@ -317,59 +308,6 @@ func NextAvailablePort(profiles []Profile) int {
 	return DefaultSocksPort
 }
 
-func PrepareImported(imported, existing []Profile) []Profile {
-	usedPorts := map[int]bool{}
-	for _, p := range existing {
-		if p.SocksPort > 0 {
-			usedPorts[p.SocksPort] = true
-		}
-	}
-
-	nextPort := DefaultSocksPort
-	now := time.Now().UTC()
-	for i := range imported {
-		imported[i].ID = NewID()
-		imported[i].Normalize()
-		if imported[i].IsTailscale() {
-			imported[i].TailscaleConfig.Authenticated = false
-		}
-		if imported[i].Name == "" {
-			imported[i].Name = "Imported profile"
-		}
-		imported[i].CreatedAt = now
-		imported[i].UpdatedAt = now
-
-		if imported[i].SocksPort < 1 || imported[i].SocksPort > 65535 || usedPorts[imported[i].SocksPort] {
-			port, ok := nextAvailableImportPort(usedPorts, nextPort)
-			if ok {
-				imported[i].SocksPort = port
-				nextPort = port + 1
-			} else {
-				imported[i].SocksPort = DefaultSocksPort
-			}
-		}
-		usedPorts[imported[i].SocksPort] = true
-	}
-	return imported
-}
-
-func nextAvailableImportPort(usedPorts map[int]bool, start int) (int, bool) {
-	if start < 1 || start > 65535 {
-		start = DefaultSocksPort
-	}
-	for port := start; port <= 65535; port++ {
-		if !usedPorts[port] {
-			return port, true
-		}
-	}
-	for port := 1; port < start; port++ {
-		if !usedPorts[port] {
-			return port, true
-		}
-	}
-	return 0, false
-}
-
 func DuplicateBindAddress(profiles []Profile) (bindAddress, firstName, secondName string, found bool) {
 	seen := map[string]string{}
 	for _, p := range profiles {
@@ -380,6 +318,52 @@ func DuplicateBindAddress(profiles []Profile) (bindAddress, firstName, secondNam
 		seen[bind] = p.Name
 	}
 	return "", "", "", false
+}
+
+// RuntimeConfigChanged reports whether applying after to an active profile
+// requires its backend to be restarted.
+func RuntimeConfigChanged(before, after Profile) bool {
+	before.Normalize()
+	after.Normalize()
+	return before.Kind != after.Kind ||
+		before.WireGuardConfig != after.WireGuardConfig ||
+		tailscaleRestartConfigChanged(before.TailscaleConfig, after.TailscaleConfig) ||
+		before.BindAddress() != after.BindAddress()
+}
+
+func tailscaleRestartConfigChanged(before, after TailscaleConfig) bool {
+	before.Normalize()
+	after.Normalize()
+	return before.Hostname != after.Hostname ||
+		before.AuthKey != after.AuthKey ||
+		before.ControlURL != after.ControlURL ||
+		before.Ephemeral != after.Ephemeral
+}
+
+// ExitNodeConfigChanged reports whether the live-updatable Tailscale exit-node
+// preferences differ between two versions of the same profile.
+func ExitNodeConfigChanged(before, after Profile) bool {
+	before.Normalize()
+	after.Normalize()
+	if !before.IsTailscale() || !after.IsTailscale() {
+		return false
+	}
+	return before.TailscaleConfig.ExitNode != after.TailscaleConfig.ExitNode ||
+		before.TailscaleConfig.AutoExitNode != after.TailscaleConfig.AutoExitNode ||
+		before.TailscaleConfig.ExitNodeAllowLANAccess != after.TailscaleConfig.ExitNodeAllowLANAccess
+}
+
+// FieldsChanged compares persisted profile fields while ignoring timestamps.
+func FieldsChanged(before, after Profile) bool {
+	before.Normalize()
+	after.Normalize()
+	return before.Kind != after.Kind ||
+		before.Name != after.Name ||
+		before.WireGuardConfig != after.WireGuardConfig ||
+		before.TailscaleConfig != after.TailscaleConfig ||
+		before.SocksHost != after.SocksHost ||
+		before.SocksPort != after.SocksPort ||
+		before.AutoStart != after.AutoStart
 }
 
 func parseSections(text string) map[string]map[string]bool {
@@ -411,24 +395,4 @@ func parseSections(text string) map[string]map[string]bool {
 		}
 	}
 	return sections
-}
-
-func stripSection(text, sectionName string) string {
-	target := strings.ToLower(strings.TrimSpace(sectionName))
-	var kept []string
-	dropping := false
-
-	for line := range strings.SplitSeq(text, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.Contains(trimmed, "]") {
-			end := strings.Index(trimmed, "]")
-			current := strings.ToLower(strings.TrimSpace(trimmed[1:end]))
-			dropping = current == target
-		}
-		if !dropping {
-			kept = append(kept, line)
-		}
-	}
-
-	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
