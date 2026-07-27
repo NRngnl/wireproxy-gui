@@ -1,6 +1,6 @@
 module github.com/NRngnl/wireproxy-gui
 
-go 1.26.4
+go 1.26.5
 
 require (
 	fyne.io/fyne/v2 v2.8.0
@@ -8,7 +8,7 @@ require (
 	github.com/things-go/go-socks5 v0.1.1
 	github.com/windtf/wireproxy v1.1.3
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
-	tailscale.com v1.100.0
+	tailscale.com v1.102.0
 )
 
 require (
@@ -53,7 +53,7 @@ require (
 	github.com/josephspurrier/goversioninfo v1.7.0 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.2 // indirect
 	github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25 // indirect
-	github.com/klauspost/compress v1.19.0 // indirect
+	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/mdlayher/netlink v1.11.2 // indirect
 	github.com/mdlayher/socket v0.6.1 // indirect
@@ -73,7 +73,7 @@ require (
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd // indirect
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20251127225136-f19339b67368 // indirect
-	github.com/tailscale/wireguard-go v0.0.0-20260527010701-b48af7099cad // indirect
+	github.com/tailscale/wireguard-go v0.0.0-20260715223240-2e01ba5b00f0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yuin/goldmark v1.8.4 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
