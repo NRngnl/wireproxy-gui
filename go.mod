@@ -8,7 +8,7 @@ require (
 	github.com/things-go/go-socks5 v0.1.3
 	github.com/windtf/wireproxy v1.1.3
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
-	tailscale.com v1.102.3
+	tailscale.com v1.102.4
 )
 
 require (
