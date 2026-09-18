@@ -384,9 +384,20 @@ func TestConfigLogSplitHonorsResizeOffset(t *testing.T) {
 	window.Resize(fyne.NewSize(800, 600))
 	fynetest.ApplyTheme(t, theme.DefaultTheme())
 	window.Canvas().Refresh(split)
-	want := split.Size().Height * float32(split.Offset)
-	if delta := split.Leading.Size().Height - want; delta < -8 || delta > 8 {
-		t.Fatalf("leading height = %.1f, want %.1f", split.Leading.Size().Height, want)
+	want := split.Size().Width * float32(split.Offset)
+	if delta := split.Leading.Size().Width - want; delta < -8 || delta > 8 {
+		t.Fatalf("leading width = %.1f, want %.1f", split.Leading.Size().Width, want)
+	}
+}
+
+// TestConfigLogSplitIsHorizontal ensures the Activity log stays in its own
+// full-height vertical column next to the configuration panel, instead of a
+// stacked top/bottom split where the config form's height changes (e.g.
+// switching between WireGuard and Tailscale) would squeeze the log.
+func TestConfigLogSplitIsHorizontal(t *testing.T) {
+	split := newConfigLogSplit(widget.NewLabel("config"), widget.NewLabel("log"))
+	if !split.Horizontal {
+		t.Fatal("config/log split must be horizontal so the log keeps its own vertical column")
 	}
 }
 
@@ -394,6 +405,29 @@ func TestWireGuardConfigEditorHasSmallSplitMinimum(t *testing.T) {
 	entry := newWireGuardConfigEntry()
 	if entry.MinSize().Height > 120 {
 		t.Fatalf("config editor min height = %v", entry.MinSize().Height)
+	}
+}
+
+// TestBackendConfigSwitcherMinSizeStaysStable guards against the window
+// resizing whenever the user switches between the WireGuard and Tailscale
+// backends. container.NewStack's MinSize only counts visible children, so
+// toggling Show()/Hide() between the short WireGuard editor and the much
+// taller Tailscale form used to change the stack's minimum height and force
+// the whole window to resize. newBackendConfigSwitcher must keep the
+// reported MinSize identical across both selections.
+func TestBackendConfigSwitcherMinSizeStaysStable(t *testing.T) {
+	fynetest.NewTempApp(t)
+	gui, _ := newProfilesTestGUI(t)
+	switcher := newBackendConfigSwitcher(gui.configEntry, gui.tailscaleForm)
+
+	gui.updateBackendVisibility(profile.BackendWireGuard)
+	wireGuardMin := switcher.MinSize()
+
+	gui.updateBackendVisibility(profile.BackendTailscale)
+	tailscaleMin := switcher.MinSize()
+
+	if wireGuardMin != tailscaleMin {
+		t.Fatalf("switcher min size changed across backends: wireguard=%v tailscale=%v", wireGuardMin, tailscaleMin)
 	}
 }
 

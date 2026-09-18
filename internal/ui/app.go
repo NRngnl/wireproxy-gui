@@ -289,7 +289,7 @@ func (g *GUI) build() {
 		actionBar,
 		nil,
 		nil,
-		container.NewStack(g.configEntry, g.tailscaleForm),
+		newBackendConfigSwitcher(g.configEntry, g.tailscaleForm),
 	))
 	activity := newSurface(container.NewBorder(
 		newSectionLabel(tr("Activity")),
@@ -606,7 +606,47 @@ func exitNodeLabelForValue(values map[string]string, value string) (string, bool
 }
 
 func newConfigLogSplit(configPanel, logPanel fyne.CanvasObject) *container.Split {
-	return container.NewVSplit(configPanel, logPanel)
+	return container.NewHSplit(configPanel, logPanel)
+}
+
+// stableStackLayout behaves like layout.NewStackLayout, except MinSize
+// includes every child's minimum size regardless of Visible(), and Layout
+// only resizes/moves the visible ones.
+//
+// Fyne's built-in stackLayout.MinSize skips invisible children, so a stack
+// that toggles Show()/Hide() between differently sized children (here: the
+// WireGuard editor and the taller Tailscale form) reports a different
+// MinSize depending on which child is currently visible. That change
+// propagates up through the surrounding split panes and resizes the whole
+// window every time the backend is switched. Measuring every child keeps
+// the reported MinSize constant across the switch, so the window no longer
+// forces a resize; the panel is simply sized for the taller of the two
+// forms at all times.
+type stableStackLayout struct{}
+
+func (stableStackLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	topLeft := fyne.NewPos(0, 0)
+	for _, child := range objects {
+		child.Resize(size)
+		child.Move(topLeft)
+	}
+}
+
+func (stableStackLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	minSize := fyne.NewSize(0, 0)
+	for _, child := range objects {
+		minSize = minSize.Max(child.MinSize())
+	}
+	return minSize
+}
+
+// newBackendConfigSwitcher stacks the backend-switchable config widgets (the
+// WireGuard editor and the Tailscale form), only one of which is ever
+// visible at a time, using stableStackLayout so the reported minimum size
+// does not change when the visible child changes. See stableStackLayout for
+// why the built-in container.NewStack cannot be used here.
+func newBackendConfigSwitcher(wireGuardEditor, tailscaleForm fyne.CanvasObject) *fyne.Container {
+	return container.New(stableStackLayout{}, wireGuardEditor, tailscaleForm)
 }
 
 func (g *GUI) installTray() {
