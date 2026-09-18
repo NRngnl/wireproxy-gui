@@ -41,7 +41,28 @@ func (t nativeTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
 }
 
 func (t nativeTheme) Size(name fyne.ThemeSizeName) float32 {
+	if size, ok := nativeSizes[name]; ok {
+		return size
+	}
 	return t.fallback.Size(name)
+}
+
+// nativeSizes keeps controls calm and touch-friendly without inflating the
+// information-dense configuration views. The larger radii and breathing room
+// mirror the platform's grouped controls while leaving text metrics native to
+// Fyne so layouts remain predictable on every supported desktop.
+var nativeSizes = map[fyne.ThemeSizeName]float32{
+	theme.SizeNamePadding:           6,
+	theme.SizeNameInnerWindowRadius: 12,
+	theme.SizeNameInputRadius:       10,
+	theme.SizeNameButtonRadius:      10,
+	theme.SizeNameCardRadius:        14,
+	theme.SizeNameDialogRadius:      14,
+	theme.SizeNamePopupRadius:       10,
+	theme.SizeNameMenuRadius:        10,
+	theme.SizeNameSelectionRadius:   8,
+	theme.SizeNameScrollBarRadius:   6,
+	theme.SizeNameModalBlurRadius:   4,
 }
 
 var nativeDarkColors = map[fyne.ThemeColorName]color.Color{

@@ -77,6 +77,31 @@ func TestNativeThemeDelegatesIconsFontsAndSizes(t *testing.T) {
 	if got, want := th.Size(theme.SizeNameText), fallback.Size(theme.SizeNameText); got != want {
 		t.Fatalf("native theme text size = %v, want %v", got, want)
 	}
+	for name, want := range map[fyne.ThemeSizeName]float32{
+		theme.SizeNamePadding:         6,
+		theme.SizeNameInputRadius:     10,
+		theme.SizeNameButtonRadius:    10,
+		theme.SizeNameCardRadius:      14,
+		theme.SizeNameSelectionRadius: 8,
+	} {
+		if got := th.Size(name); got != want {
+			t.Fatalf("native theme %s = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestBuildShowsGuidedEmptyStateWithoutProfiles(t *testing.T) {
+	app := fynetest.NewTempApp(t)
+	applyAppTheme(app)
+	gui := &GUI{app: app, core: newFakeApplication()}
+	gui.build()
+	t.Cleanup(gui.window.Close)
+	if !gui.emptyState.Visible() || gui.detailPane.Visible() {
+		t.Fatalf("empty/detail visibility = %t/%t", gui.emptyState.Visible(), gui.detailPane.Visible())
+	}
+	if gui.sidebarSummaryLabel.Text != "No profiles" {
+		t.Fatalf("sidebar summary = %q", gui.sidebarSummaryLabel.Text)
+	}
 }
 
 func TestImportProfilesUsesNativeSelectedPathAndApplicationBoundary(t *testing.T) {
@@ -255,8 +280,21 @@ func TestTailscaleFormGuidesAuthentication(t *testing.T) {
 	if gui.tsLoginButton.Text != "Login" || gui.tsControlURL.PlaceHolder != "Optional; leave empty for Tailscale" {
 		t.Fatalf("unexpected Tailscale controls")
 	}
-	if !strings.Contains(requireFormHint(t, gui.tailscaleForm, "Auth key"), "Logout removes this profile's stored Tailscale state") {
-		t.Fatal("auth hint does not explain logout")
+	if !strings.Contains(requireFormHint(t, gui.tailscaleForm, "Auth key"), "browser sign-in") {
+		t.Fatal("auth hint does not explain browser sign-in")
+	}
+}
+
+// TestTailscaleFormHintsStayWithinViewport guards against Fyne's canvas.Text
+// hint rows, which never wrap, forcing the Form (and therefore the window)
+// wider than the viewport. See internal/ui/app.go setupTailscaleForm.
+func TestTailscaleFormHintsStayWithinViewport(t *testing.T) {
+	gui, _ := newProfilesTestGUI(t)
+	const maxHintChars = 90
+	for _, item := range gui.tailscaleForm.Items {
+		if len(item.HintText) > maxHintChars {
+			t.Fatalf("hint for %q is %d chars, unwrapped canvas.Text will widen the window: %q", item.Text, len(item.HintText), item.HintText)
+		}
 	}
 }
 
@@ -316,7 +354,7 @@ func TestTransitioningTailscaleExitNodeFieldsAreDisabled(t *testing.T) {
 
 func TestStatusSummaryUsesUserFacingStatus(t *testing.T) {
 	item := profile.New("demo", sampleWireGuardConfig, 1080)
-	if got, want := statusSummaryText(item, "running"), "demo on 127.0.0.1:1080 [connected]"; got != want {
+	if got, want := statusSummaryText(item, "running"), "Connected · SOCKS5 127.0.0.1:1080"; got != want {
 		t.Fatalf("status summary = %q", got)
 	}
 }
@@ -328,7 +366,7 @@ func TestProfileListRowShowsStatusAndBindOnSeparateLines(t *testing.T) {
 	row := newProfileListItem()
 	gui.updateProfileListItem(0, row)
 	icon, name, bind, ok := profileListItemViews(row)
-	if !ok || name.Text != "office" || bind.Text != "SOCKS5 127.0.0.1:1080" {
+	if !ok || name.Text != "office" || bind.Text != "Connected · SOCKS5 127.0.0.1:1080" {
 		t.Fatalf("profile row = ok:%t name:%q bind:%q", ok, name.Text, bind.Text)
 	}
 	if icon.Resource.Name() != connectedTrayIcon.Name() {
@@ -379,9 +417,73 @@ func TestRefreshButtonsUsesApplicationRuntimeLock(t *testing.T) {
 	item := profile.New("demo", sampleWireGuardConfig, 1080)
 	gui, core := newProfilesTestGUI(t, item)
 	core.locked[item.ID] = true
+	core.statuses[item.ID] = application.StatusRunning
 	gui.refreshButtons()
-	if !gui.connectButton.Disabled() || gui.disconnectButton.Disabled() {
-		t.Fatal("locked profile should disable Connect and enable Disconnect")
+	if gui.connectButton.Visible() || !gui.disconnectButton.Visible() || gui.disconnectButton.Disabled() {
+		t.Fatal("running profile should show an enabled Disconnect action")
+	}
+}
+
+func TestPrimaryConnectionActionKeepsStartingInterruptible(t *testing.T) {
+	item := profile.New("demo", sampleWireGuardConfig, 1080)
+	gui, core := newProfilesTestGUI(t, item)
+	core.locked[item.ID] = true
+	core.statuses[item.ID] = application.StatusStarting
+	gui.refreshButtons()
+	if gui.connectButton.Visible() || !gui.disconnectButton.Visible() || gui.disconnectButton.Disabled() {
+		t.Fatal("starting profile should expose an enabled cancel action")
+	}
+	if gui.disconnectButton.Text != "Cancel Connection" {
+		t.Fatalf("starting action = %q", gui.disconnectButton.Text)
+	}
+}
+
+func TestPrimaryConnectionActionShowsStoppingProgress(t *testing.T) {
+	item := profile.New("demo", sampleWireGuardConfig, 1080)
+	gui, core := newProfilesTestGUI(t, item)
+	core.locked[item.ID] = true
+	core.statuses[item.ID] = application.StatusStopping
+	gui.refreshButtons()
+	if gui.connectButton.Visible() || !gui.disconnectButton.Visible() || !gui.disconnectButton.Disabled() {
+		t.Fatal("stopping profile should show disabled progress feedback")
+	}
+	if gui.disconnectButton.Text != "Disconnecting…" {
+		t.Fatalf("stopping action = %q", gui.disconnectButton.Text)
+	}
+}
+
+func TestProfileHeaderPresentsHierarchyAndStatus(t *testing.T) {
+	item := profile.New("office", sampleWireGuardConfig, 1080)
+	gui, core := newProfilesTestGUI(t, item)
+	core.statuses[item.ID] = application.StatusRunning
+	gui.showSelected()
+	if gui.profileTitleLabel.Text != "office" {
+		t.Fatalf("profile title = %q", gui.profileTitleLabel.Text)
+	}
+	if gui.profileMetaLabel.Text != "WireGuard · SOCKS5 127.0.0.1:1080" {
+		t.Fatalf("profile metadata = %q", gui.profileMetaLabel.Text)
+	}
+	if gui.statusLabel.Text != "Connected" || gui.statusLabel.Importance != widget.SuccessImportance {
+		t.Fatalf("status = %q/%v", gui.statusLabel.Text, gui.statusLabel.Importance)
+	}
+	if gui.statusIcon.Resource.Name() != connectedTrayIcon.Name() {
+		t.Fatalf("status icon = %q", gui.statusIcon.Resource.Name())
+	}
+}
+
+func TestProfilesSummaryReportsConnectedCount(t *testing.T) {
+	first := profile.New("first", sampleWireGuardConfig, 1080)
+	second := profile.New("second", sampleWireGuardConfig, 1081)
+	statuses := map[string]string{first.ID: "running", second.ID: "stopped"}
+	got := profilesSummaryText([]profile.Profile{first, second}, func(id string) string { return statuses[id] })
+	if got != "2 profiles · 1 connected" {
+		t.Fatalf("profiles summary = %q", got)
+	}
+	if got := profilesSummaryText([]profile.Profile{first}, func(string) string { return "stopped" }); got != "1 profile · 0 connected" {
+		t.Fatalf("singular profiles summary = %q", got)
+	}
+	if got := profilesSummaryText(nil, func(string) string { return "stopped" }); got != "No profiles" {
+		t.Fatalf("empty profiles summary = %q", got)
 	}
 }
 
@@ -614,10 +716,15 @@ func newProfilesTestGUI(t *testing.T, profiles ...profile.Profile) (*GUI, *fakeA
 	gui.configLabel = widget.NewLabel(tr("WireGuard configuration"))
 	gui.setupTailscaleForm()
 	gui.setupLogView()
-	gui.statusLabel = widget.NewLabel("")
+	gui.profileTitleLabel = newHeadingLabel("")
+	gui.profileMetaLabel = newSecondaryLabel("")
+	gui.statusIcon = widget.NewIcon(disconnectedTrayIcon)
+	gui.statusLabel = newSecondaryLabel("")
+	gui.feedbackLabel = newSecondaryLabel("")
 	gui.saveButton = widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), nil)
 	gui.deleteButton = widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), nil)
 	gui.connectButton = widget.NewButtonWithIcon("Connect", theme.MediaPlayIcon(), nil)
+	gui.connectButton.Importance = widget.HighImportance
 	gui.disconnectButton = widget.NewButtonWithIcon("Disconnect", theme.MediaStopIcon(), nil)
 	gui.exportButton = widget.NewButtonWithIcon("Export", theme.UploadIcon(), nil)
 	gui.showSelected()

@@ -35,7 +35,7 @@ var usageGuideParagraphs = []string{
 	"Tailscale auth is not the same as WireGuard config. Paste an auth key and click Login or Connect to register this app as a Tailscale device; leave Auth key empty for a browser sign-in URL in the profile log. If Tailscale requires device approval, the profile log will ask you to approve the device in the admin console and the app will detect approval automatically. After authentication succeeds, the app removes the saved auth key, marks the profile authenticated, and keeps the auth field locked until you click Logout. Logout removes this profile's stored Tailscale state and unlocks auth. Auth key, control URL, hostname, backend, and SOCKS5 bind fields are locked while that profile is connected, connecting, or disconnecting. Exit-node mode, selected exit node, and LAN access can be changed while connected; click Save to apply them without reconnecting.",
 	"Exit-node choices are not live-updating. Connect the Tailscale profile, click Refresh to load available exit-node devices from that tailnet, and click Refresh again after tailnet devices or approvals change. You can also type a node ID, hostname, or Tailscale IP manually. Automatic exit asks Tailscale to choose an available exit node.",
 	"The profile log follows the newest line by default. Scrolling up pauses following so you can read earlier output; scrolling back to the bottom follows new lines again.",
-	"The tray menu has one profile row per profile. The colored dot shows connection status, and each submenu shows status text, SOCKS5 bind address, backend detail, and Connect or Disconnect actions. The icon is green only while connected; other states use a red icon and the status text shows disconnected, connecting, disconnecting, or error.",
+	"The sidebar and tray use both text and color for connection status: gray when disconnected, orange while connecting or disconnecting, green when connected, and red for an error. Each tray submenu also shows the SOCKS5 bind address, backend detail, and Connect or Disconnect actions.",
 	"Disconnect a connected or connecting profile, and wait for it to finish disconnecting, before changing its backend, tunnel configuration, or SOCKS5 bind address. Profile name and startup preference can be changed while connected.",
 	"Import and Export open the operating system's native file dialog and use the selected filesystem path. Export writes profiles as JSON. Import accepts exported JSON bundles or WireGuard .conf files. Tailscale node state and the local authenticated marker are not exported, so imported Tailscale profiles require Login again.",
 	"Closing the window hides it when tray support is available. Use Quit from the tray menu to stop all profiles, wait briefly for them to close, and exit.",
@@ -44,10 +44,22 @@ var usageGuideParagraphs = []string{
 var runOnUI = fyne.Do
 
 var (
-	connectedTrayIcon    = fyne.NewStaticResource("status-connected.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#28a745"/></svg>`))
+	connectedTrayIcon    = fyne.NewStaticResource("status-connected.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#34c759"/></svg>`))
 	disconnectedTrayIcon = fyne.NewStaticResource(
 		"status-disconnected.svg",
-		[]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#d73a49"/></svg>`),
+		[]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#8e8e93"/></svg>`),
+	)
+	connectingTrayIcon = fyne.NewStaticResource(
+		"status-connecting.svg",
+		[]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#ff9500"/></svg>`),
+	)
+	disconnectingTrayIcon = fyne.NewStaticResource(
+		"status-disconnecting.svg",
+		[]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#ff9f0a"/></svg>`),
+	)
+	errorTrayIcon = fyne.NewStaticResource(
+		"status-error.svg",
+		[]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#ff3b30"/></svg>`),
 	)
 )
 
@@ -60,33 +72,41 @@ type GUI struct {
 	files  profileFileDialog
 	tray   desktop.App
 
-	selectedID string
-	logTails   map[string]bool
-	logOffsets map[string]fyne.Position
+	selectedID       string
+	logTails         map[string]bool
+	logOffsets       map[string]fyne.Position
+	exitNodesLoading bool
 
-	list           *widget.List
-	kindSelect     *widget.Select
-	nameEntry      *widget.Entry
-	hostEntry      *widget.Entry
-	portEntry      *widget.Entry
-	autoStartCheck *widget.Check
-	configEntry    *widget.Entry
-	configLabel    *widget.Label
-	tailscaleForm  *widget.Form
-	tsHostname     *widget.Entry
-	tsAuthKey      *widget.Entry
-	tsLoginButton  *widget.Button
-	tsControlURL   *widget.Entry
-	tsExitNode     *widget.SelectEntry
-	tsExitRefresh  *widget.Button
-	tsExitValues   map[string]string
-	tsAutoExit     *widget.Check
-	tsAllowLAN     *widget.Check
-	tsEphemeral    *widget.Check
-	logLabel       *widget.Label
-	logScroll      *container.Scroll
-	logTail        bool
-	statusLabel    *widget.Label
+	list                *widget.List
+	sidebarSummaryLabel *widget.Label
+	emptyState          fyne.CanvasObject
+	detailPane          fyne.CanvasObject
+	profileTitleLabel   *widget.Label
+	profileMetaLabel    *widget.Label
+	statusIcon          *widget.Icon
+	statusLabel         *widget.Label
+	feedbackLabel       *widget.Label
+	kindSelect          *widget.Select
+	nameEntry           *widget.Entry
+	hostEntry           *widget.Entry
+	portEntry           *widget.Entry
+	autoStartCheck      *widget.Check
+	configEntry         *widget.Entry
+	configLabel         *widget.Label
+	tailscaleForm       *widget.Form
+	tsHostname          *widget.Entry
+	tsAuthKey           *widget.Entry
+	tsLoginButton       *widget.Button
+	tsControlURL        *widget.Entry
+	tsExitNode          *widget.SelectEntry
+	tsExitRefresh       *widget.Button
+	tsExitValues        map[string]string
+	tsAutoExit          *widget.Check
+	tsAllowLAN          *widget.Check
+	tsEphemeral         *widget.Check
+	logLabel            *widget.Label
+	logScroll           *container.Scroll
+	logTail             bool
 
 	saveButton       *widget.Button
 	deleteButton     *widget.Button
@@ -161,7 +181,6 @@ func Run(core Application, loadErr error) {
 
 func (g *GUI) build() {
 	g.window = g.app.NewWindow(tr(buildinfo.WindowTitle()))
-	g.window.Resize(fyne.NewSize(1120, 760))
 
 	g.kindSelect = widget.NewSelect([]string{tr("WireGuard"), tr("Tailscale")}, func(_ string) {
 		g.updateBackendVisibility(g.selectedBackendKind())
@@ -172,18 +191,33 @@ func (g *GUI) build() {
 	g.autoStartCheck = widget.NewCheck(tr("Connect when app opens"), nil)
 
 	g.configEntry = newWireGuardConfigEntry()
-	g.configLabel = widget.NewLabel(tr("WireGuard configuration"))
+	g.configLabel = newSectionLabel(tr("WireGuard configuration"))
 	g.setupTailscaleForm()
 
 	g.setupLogView()
 
-	g.statusLabel = widget.NewLabel(tr("No profile selected"))
+	g.profileTitleLabel = newHeadingLabel("")
+	g.profileTitleLabel.Truncation = fyne.TextTruncateEllipsis
+	g.profileMetaLabel = newSecondaryLabel("")
+	g.profileMetaLabel.Truncation = fyne.TextTruncateEllipsis
+	g.statusIcon = widget.NewIcon(disconnectedTrayIcon)
+	g.statusLabel = newSecondaryLabel(tr("Disconnected"))
+	g.statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+	g.feedbackLabel = newSecondaryLabel("")
+	g.feedbackLabel.Hide()
 
 	g.saveButton = widget.NewButtonWithIcon(tr("Save"), theme.DocumentSaveIcon(), g.saveSelected)
-	g.deleteButton = widget.NewButtonWithIcon(tr("Delete"), theme.DeleteIcon(), g.deleteSelected)
+	g.deleteButton = widget.NewButtonWithIcon(
+		tr("Delete"),
+		theme.NewColoredResource(theme.DeleteIcon(), theme.ColorNameError),
+		g.deleteSelected,
+	)
+	g.deleteButton.Importance = widget.LowImportance
 	g.connectButton = widget.NewButtonWithIcon(tr("Connect"), theme.MediaPlayIcon(), g.connectSelected)
+	g.connectButton.Importance = widget.HighImportance
 	g.disconnectButton = widget.NewButtonWithIcon(tr("Disconnect"), theme.MediaStopIcon(), g.disconnectSelected)
 	g.exportButton = widget.NewButtonWithIcon(tr("Export"), theme.UploadIcon(), g.exportSelected)
+	g.exportButton.Importance = widget.LowImportance
 
 	g.list = widget.NewList(
 		func() int { return len(g.core.Profiles()) },
@@ -194,16 +228,37 @@ func (g *GUI) build() {
 		profiles := g.core.Profiles()
 		if id >= 0 && id < len(profiles) {
 			g.selectedID = profiles[id].ID
+			g.clearFeedback()
 			g.showSelected()
 		}
 	}
 
+	profilesHeading := newHeadingLabel(tr("Profiles"))
+	g.sidebarSummaryLabel = newSecondaryLabel("")
+	addButton := widget.NewButtonWithIcon(tr("Add Profile"), theme.ContentAddIcon(), g.addProfile)
+	addButton.Importance = widget.HighImportance
+	importButton := widget.NewButtonWithIcon(tr("Import"), theme.DownloadIcon(), g.importProfiles)
+	importButton.Importance = widget.LowImportance
+	helpButton := widget.NewButtonWithIcon(tr("Help"), theme.HelpIcon(), g.showUsageGuide)
+	helpButton.Importance = widget.LowImportance
 	leftActions := container.NewHBox(
-		widget.NewButtonWithIcon(tr("Add"), theme.ContentAddIcon(), g.addProfile),
-		widget.NewButtonWithIcon(tr("Import"), theme.DownloadIcon(), g.importProfiles),
-		widget.NewButtonWithIcon(tr("Help"), theme.HelpIcon(), g.showUsageGuide),
+		addButton,
+		importButton,
+		helpButton,
 	)
-	left := container.NewBorder(leftActions, nil, nil, nil, g.list)
+	leftHeader := container.NewVBox(profilesHeading, g.sidebarSummaryLabel, leftActions)
+
+	connectAllButton := widget.NewButtonWithIcon(tr("Connect All"), theme.MediaPlayIcon(), g.connectAll)
+	disconnectAllButton := widget.NewButtonWithIcon(tr("Disconnect All"), theme.MediaStopIcon(), g.disconnectAll)
+	exportAllButton := widget.NewButtonWithIcon(tr("Export All"), theme.UploadIcon(), g.exportAll)
+	exportAllButton.Importance = widget.LowImportance
+	leftFooter := container.NewVBox(
+		widget.NewSeparator(),
+		newSectionLabel(tr("All Profiles")),
+		container.NewGridWithColumns(2, connectAllButton, disconnectAllButton),
+		exportAllButton,
+	)
+	left := newSurface(container.NewBorder(leftHeader, leftFooter, nil, nil, g.list))
 
 	form := &widget.Form{
 		Items: []*widget.FormItem{
@@ -214,35 +269,92 @@ func (g *GUI) build() {
 			{Text: tr("Startup"), Widget: g.autoStartCheck},
 		},
 	}
-	actionBar := container.NewHBox(
-		g.saveButton,
-		g.exportButton,
-		g.connectButton,
-		g.disconnectButton,
-		g.deleteButton,
-		widget.NewButtonWithIcon(tr("Connect All"), theme.MediaPlayIcon(), g.connectAll),
-		widget.NewButtonWithIcon(tr("Disconnect All"), theme.MediaStopIcon(), g.disconnectAll),
-		widget.NewButtonWithIcon(tr("Export All"), theme.UploadIcon(), g.exportAll),
+	connectionAction := container.NewStack(g.connectButton, g.disconnectButton)
+	status := container.NewHBox(g.statusIcon, g.statusLabel)
+	headerText := container.NewVBox(
+		container.NewBorder(nil, nil, nil, status, g.profileTitleLabel),
+		g.profileMetaLabel,
 	)
-	detail := container.NewBorder(
-		container.NewVBox(g.statusLabel, form, g.configLabel),
+	header := newSurface(container.NewBorder(nil, nil, nil, container.NewCenter(connectionAction), headerText))
+
+	actionBar := container.NewBorder(
+		nil,
+		nil,
+		container.NewHBox(g.saveButton, g.exportButton),
+		g.deleteButton,
+		g.feedbackLabel,
+	)
+	configuration := newSurface(container.NewBorder(
+		container.NewVBox(form, widget.NewSeparator(), g.configLabel),
 		actionBar,
 		nil,
 		nil,
-		newConfigLogSplit(
-			container.NewStack(g.configEntry, g.tailscaleForm),
-			container.NewBorder(widget.NewLabel(tr("Profile log")), nil, nil, nil, g.logScroll),
-		),
+		container.NewStack(g.configEntry, g.tailscaleForm),
+	))
+	activity := newSurface(container.NewBorder(
+		newSectionLabel(tr("Activity")),
+		nil,
+		nil,
+		nil,
+		g.logScroll,
+	))
+	configLog := newConfigLogSplit(configuration, activity)
+	g.detailPane = container.NewBorder(
+		header,
+		nil,
+		nil,
+		nil,
+		configLog,
 	)
 
-	split := container.NewHSplit(left, detail)
-	split.Offset = 0.30
+	emptyAddButton := widget.NewButtonWithIcon(tr("Add Profile"), theme.ContentAddIcon(), g.addProfile)
+	emptyAddButton.Importance = widget.HighImportance
+	emptyImportButton := widget.NewButtonWithIcon(tr("Import"), theme.DownloadIcon(), g.importProfiles)
+	emptyImportButton.Importance = widget.LowImportance
+	emptyDescription := newSecondaryLabel(tr("Add a profile or import WireGuard configuration to begin."))
+	emptyDescription.Wrapping = fyne.TextWrapWord
+	g.emptyState = container.NewCenter(newSurface(container.NewVBox(
+		newHeadingLabel(tr("No profiles yet")),
+		emptyDescription,
+		container.NewHBox(emptyAddButton, emptyImportButton),
+	)))
+
+	detail := container.NewStack(g.emptyState, g.detailPane)
+	split := container.NewHSplit(container.NewPadded(left), container.NewPadded(detail))
 	g.window.SetContent(split)
+	g.window.Resize(fyne.NewSize(1180, 800))
+	split.SetOffset(0.28)
+	configLog.SetOffset(0.64)
 
 	g.showSelected()
 	if len(g.core.Profiles()) > 0 {
 		g.list.Select(0)
 	}
+}
+
+func newHeadingLabel(text string) *widget.Label {
+	label := widget.NewLabel(text)
+	label.SizeName = theme.SizeNameHeadingText
+	label.TextStyle = fyne.TextStyle{Bold: true}
+	return label
+}
+
+func newSectionLabel(text string) *widget.Label {
+	label := widget.NewLabel(text)
+	label.SizeName = theme.SizeNameSubHeadingText
+	label.TextStyle = fyne.TextStyle{Bold: true}
+	return label
+}
+
+func newSecondaryLabel(text string) *widget.Label {
+	label := widget.NewLabel(text)
+	label.Importance = widget.LowImportance
+	label.SizeName = theme.SizeNameCaptionText
+	return label
+}
+
+func newSurface(content fyne.CanvasObject) *widget.Card {
+	return widget.NewCard("", "", content)
 }
 
 func newWireGuardConfigEntry() *widget.Entry {
@@ -281,7 +393,7 @@ func (g *GUI) setupTailscaleForm() {
 			{
 				Text:     tr("Auth key"),
 				Widget:   authKeyControl,
-				HintText: tr("Paste an auth key, then click Login. Leave it empty to use the browser sign-in URL in the profile log. After authentication succeeds, the saved auth key is removed and this field stays locked until Logout. Logout removes this profile's stored Tailscale state and unlocks auth."),
+				HintText: tr("Paste a key, then click Login, or leave empty for browser sign-in."),
 			},
 			{
 				Text:     tr("Control URL"),
@@ -291,7 +403,7 @@ func (g *GUI) setupTailscaleForm() {
 			{
 				Text:     tr("Exit node"),
 				Widget:   exitNodeControl,
-				HintText: tr("Connect first, then refresh to list devices from this tailnet. Save while connected to apply exit-node changes immediately."),
+				HintText: tr("Refresh to list tailnet devices, or type a node, host, or IP."),
 			},
 			{
 				Text:     tr("Exit node mode"),
@@ -376,6 +488,7 @@ func (g *GUI) updateExitNodeControlState() {
 }
 
 func (g *GUI) setExitNodeControlsEnabled(enabled bool) {
+	enabled = enabled && !g.exitNodesLoading
 	if g.tsExitNode != nil {
 		if enabled {
 			g.tsExitNode.Enable()
@@ -394,9 +507,12 @@ func (g *GUI) setExitNodeControlsEnabled(enabled bool) {
 
 func (g *GUI) refreshExitNodeOptions() {
 	p, ok := g.currentProfile()
-	if !ok || !p.IsTailscale() {
+	if !ok || !p.IsTailscale() || g.exitNodesLoading {
 		return
 	}
+	g.exitNodesLoading = true
+	g.tsExitRefresh.SetText(tr("Refreshing…"))
+	g.setExitNodeControlsEnabled(false)
 	profileID := p.ID
 	ctx := g.ctx
 	if ctx == nil {
@@ -405,6 +521,12 @@ func (g *GUI) refreshExitNodeOptions() {
 	go func() {
 		nodes, err := g.core.ExitNodes(ctx, profileID)
 		runOnUI(func() {
+			g.exitNodesLoading = false
+			g.tsExitRefresh.SetText(tr("Refresh"))
+			g.updateRuntimeFieldState()
+			if g.selectedID != profileID {
+				return
+			}
 			if err != nil {
 				g.showError("Refresh exit nodes", err)
 				return
@@ -484,9 +606,7 @@ func exitNodeLabelForValue(values map[string]string, value string) (string, bool
 }
 
 func newConfigLogSplit(configPanel, logPanel fyne.CanvasObject) *container.Split {
-	split := container.NewVSplit(configPanel, logPanel)
-	split.Offset = 0.58
-	return split
+	return container.NewVSplit(configPanel, logPanel)
 }
 
 func (g *GUI) installTray() {
@@ -540,9 +660,11 @@ func (g *GUI) updateProfileListItem(id widget.ListItemID, obj fyne.CanvasObject)
 	}
 
 	p := profiles[id]
-	statusIcon.SetResource(trayStatusIcon(g.profileStatus(p.ID)))
+	status := g.profileStatus(p.ID)
+	statusIcon.SetResource(trayStatusIcon(status))
 	name.SetText(p.Name)
-	bind.SetText(tr("SOCKS5 {{.Address}}", map[string]any{
+	bind.SetText(tr("{{.Status}} · SOCKS5 {{.Address}}", map[string]any{
+		"Status":  statusTitleText(status),
 		"Address": p.BindAddress(),
 	}))
 }
@@ -768,10 +890,18 @@ func trayStatusActive(status string) bool {
 }
 
 func trayStatusIcon(status string) fyne.Resource {
-	if trayStatusConnected(status) {
+	switch status {
+	case "running":
 		return connectedTrayIcon
+	case "starting":
+		return connectingTrayIcon
+	case "stopping":
+		return disconnectingTrayIcon
+	case "error":
+		return errorTrayIcon
+	default:
+		return disconnectedTrayIcon
 	}
-	return disconnectedTrayIcon
 }
 
 func trayStatusText(status string) string {
@@ -789,11 +919,65 @@ func trayStatusText(status string) string {
 	}
 }
 
+func statusTitleText(status string) string {
+	switch status {
+	case "running":
+		return tr("Connected")
+	case "starting":
+		return tr("Connecting")
+	case "stopping":
+		return tr("Disconnecting")
+	case "error":
+		return tr("Error")
+	default:
+		return tr("Disconnected")
+	}
+}
+
+func statusImportance(status string) widget.Importance {
+	switch status {
+	case "running":
+		return widget.SuccessImportance
+	case "starting", "stopping":
+		return widget.WarningImportance
+	case "error":
+		return widget.DangerImportance
+	default:
+		return widget.LowImportance
+	}
+}
+
 func statusSummaryText(p profile.Profile, status string) string {
-	return tr("{{.Name}} on {{.Address}} [{{.Status}}]", map[string]any{
-		"Name":    p.Name,
+	return tr("{{.Status}} · SOCKS5 {{.Address}}", map[string]any{
 		"Address": p.BindAddress(),
-		"Status":  trayStatusText(status),
+		"Status":  statusTitleText(status),
+	})
+}
+
+func profileMetaText(p profile.Profile) string {
+	return tr("{{.Backend}} · SOCKS5 {{.Address}}", map[string]any{
+		"Backend": backendKindLabel(p.Kind),
+		"Address": p.BindAddress(),
+	})
+}
+
+func profilesSummaryText(profiles []profile.Profile, status func(string) string) string {
+	if len(profiles) == 0 {
+		return tr("No profiles")
+	}
+	connected := 0
+	for _, item := range profiles {
+		if trayStatusConnected(status(item.ID)) {
+			connected++
+		}
+	}
+	template := "{{.Profiles}} profiles · {{.Connected}} connected"
+	if len(profiles) == 1 {
+		template = "{{.Profiles}} profile · {{.Connected}} connected"
+	}
+	return tr(template, map[string]any{
+		"Profiles":  len(profiles),
+		"Connected": connected,
 	})
 }
 
@@ -882,6 +1066,7 @@ func (g *GUI) shutdown() {
 }
 
 func (g *GUI) addProfile() {
+	g.clearFeedback()
 	p, err := g.core.Add(tr("New profile"))
 	if err != nil {
 		g.showError("Save profile", err)
@@ -921,6 +1106,7 @@ func (g *GUI) importProfilesFromPath(path string) error {
 	}
 	g.refresh()
 	g.selectByID(g.selectedID)
+	g.setFeedback(tr("Imported profiles"), widget.SuccessImportance)
 	return nil
 }
 
@@ -959,7 +1145,9 @@ func (g *GUI) exportProfiles(profiles []profile.Profile, fileName string) {
 	}
 	if err != nil {
 		g.showError("Export profiles", err)
+		return
 	}
+	g.setFeedback(tr("Exported"), widget.SuccessImportance)
 }
 
 func exportProfilesToPath(data []byte, path string) error {
@@ -974,7 +1162,27 @@ func (g *GUI) saveSelected() {
 	err := g.saveSelectedProfile()
 	if err != nil {
 		g.showError("Save profile", err)
+		return
 	}
+	g.setFeedback(tr("Saved"), widget.SuccessImportance)
+}
+
+func (g *GUI) setFeedback(message string, importance widget.Importance) {
+	if g.feedbackLabel == nil {
+		return
+	}
+	g.feedbackLabel.SetText(message)
+	g.feedbackLabel.Importance = importance
+	g.feedbackLabel.Refresh()
+	g.feedbackLabel.Show()
+}
+
+func (g *GUI) clearFeedback() {
+	if g.feedbackLabel == nil {
+		return
+	}
+	g.feedbackLabel.SetText("")
+	g.feedbackLabel.Hide()
 }
 
 func (g *GUI) saveSelectedProfile() error {
@@ -1022,6 +1230,7 @@ func (g *GUI) deleteSelected() {
 }
 
 func (g *GUI) connectSelected() {
+	g.clearFeedback()
 	err := g.saveSelectedProfile()
 	if err != nil {
 		g.showError("Connect profile", err)
@@ -1034,7 +1243,9 @@ func (g *GUI) connectSelected() {
 	err = g.core.Connect(p.ID)
 	if err != nil {
 		g.showError("Connect profile", err)
+		return
 	}
+	g.refresh()
 }
 
 func (g *GUI) tailscaleAuthActionSelected() {
@@ -1090,6 +1301,7 @@ func (g *GUI) logoutTailscaleSelected() {
 }
 
 func (g *GUI) disconnectSelected() {
+	g.clearFeedback()
 	p, ok := g.currentProfile()
 	if !ok {
 		return
@@ -1099,6 +1311,7 @@ func (g *GUI) disconnectSelected() {
 }
 
 func (g *GUI) connectAll() {
+	g.clearFeedback()
 	err := g.saveSelectedProfile()
 	if err != nil {
 		g.showError("Connect All", err)
@@ -1107,10 +1320,13 @@ func (g *GUI) connectAll() {
 	err = g.core.ConnectAll()
 	if err != nil {
 		g.showError("Connect All", err)
+		return
 	}
+	g.refresh()
 }
 
 func (g *GUI) disconnectAll() {
+	g.clearFeedback()
 	g.core.DisconnectAll()
 	g.refresh()
 }
@@ -1192,8 +1408,15 @@ func (g *GUI) profileFileDialog() profileFileDialog {
 }
 
 func (g *GUI) showSelected() {
+	g.refreshSidebarSummary()
 	idx := g.selectedIndex()
 	if idx < 0 {
+		if g.detailPane != nil {
+			g.detailPane.Hide()
+		}
+		if g.emptyState != nil {
+			g.emptyState.Show()
+		}
 		g.setFormEnabled(false)
 		g.kindSelect.SetSelected(backendKindLabel(profile.BackendWireGuard))
 		g.nameEntry.SetText("")
@@ -1203,7 +1426,7 @@ func (g *GUI) showSelected() {
 		g.configEntry.SetText("")
 		g.setTailscaleForm(profile.TailscaleConfig{})
 		g.setLogText("", true)
-		g.statusLabel.SetText(tr("No profile selected"))
+		g.updateHeader(profile.Profile{}, application.StatusStopped)
 		g.updateBackendVisibility(profile.BackendWireGuard)
 		return
 	}
@@ -1211,6 +1434,12 @@ func (g *GUI) showSelected() {
 	p, ok := g.currentProfile()
 	if !ok {
 		return
+	}
+	if g.emptyState != nil {
+		g.emptyState.Hide()
+	}
+	if g.detailPane != nil {
+		g.detailPane.Show()
 	}
 	g.setFormEnabled(true)
 	g.kindSelect.SetSelected(backendKindLabel(p.Kind))
@@ -1221,10 +1450,38 @@ func (g *GUI) showSelected() {
 	g.configEntry.SetText(p.WireGuardConfig)
 	g.setTailscaleForm(p.TailscaleConfig)
 	g.updateBackendVisibility(p.Kind)
-	g.statusLabel.SetText(statusSummaryText(p, g.profileStatus(p.ID)))
+	g.updateHeader(p, g.core.Status(p.ID))
 	g.setLogText(profileLogText(g.core.Logs(p.ID)), false)
 	g.refreshButtons()
 	g.updateRuntimeFieldState()
+}
+
+func (g *GUI) updateHeader(p profile.Profile, status application.Status) {
+	if g.profileTitleLabel != nil {
+		g.profileTitleLabel.SetText(p.Name)
+	}
+	if g.profileMetaLabel != nil {
+		if p.ID == "" {
+			g.profileMetaLabel.SetText("")
+		} else {
+			g.profileMetaLabel.SetText(profileMetaText(p))
+		}
+	}
+	if g.statusIcon != nil {
+		g.statusIcon.SetResource(trayStatusIcon(string(status)))
+	}
+	if g.statusLabel != nil {
+		g.statusLabel.SetText(statusTitleText(string(status)))
+		g.statusLabel.Importance = statusImportance(string(status))
+		g.statusLabel.Refresh()
+	}
+}
+
+func (g *GUI) refreshSidebarSummary() {
+	if g.sidebarSummaryLabel == nil {
+		return
+	}
+	g.sidebarSummaryLabel.SetText(profilesSummaryText(g.core.Profiles(), g.profileStatus))
 }
 
 func (g *GUI) setFormEnabled(enabled bool) {
@@ -1265,10 +1522,11 @@ func (g *GUI) refresh() {
 	if g.list != nil {
 		g.list.Refresh()
 	}
+	g.refreshSidebarSummary()
 	g.refreshButtons()
 	if g.selectedID != "" {
 		if p, ok := g.currentProfile(); ok {
-			g.statusLabel.SetText(statusSummaryText(p, g.profileStatus(p.ID)))
+			g.updateHeader(p, g.core.Status(p.ID))
 			g.setLogText(profileLogText(g.core.Logs(p.ID)), false)
 		}
 	}
@@ -1285,14 +1543,37 @@ func (g *GUI) refreshButtons() {
 	if !ok {
 		return
 	}
-	locked := g.core.RuntimeLocked(p.ID)
-	if locked {
-		g.connectButton.Disable()
+	status := g.core.Status(p.ID)
+	switch status {
+	case application.StatusStarting:
+		g.connectButton.Hide()
+		g.disconnectButton.SetText(tr("Cancel Connection"))
+		g.disconnectButton.SetIcon(theme.CancelIcon())
 		g.disconnectButton.Enable()
-		return
+		g.disconnectButton.Show()
+	case application.StatusRunning:
+		g.connectButton.Hide()
+		g.disconnectButton.SetText(tr("Disconnect"))
+		g.disconnectButton.SetIcon(theme.MediaStopIcon())
+		g.disconnectButton.Enable()
+		g.disconnectButton.Show()
+	case application.StatusStopping:
+		g.connectButton.Hide()
+		g.disconnectButton.SetText(tr("Disconnecting…"))
+		g.disconnectButton.SetIcon(theme.MediaStopIcon())
+		g.disconnectButton.Disable()
+		g.disconnectButton.Show()
+	default:
+		g.disconnectButton.Hide()
+		g.connectButton.SetText(tr("Connect"))
+		g.connectButton.SetIcon(theme.MediaPlayIcon())
+		if g.core.RuntimeLocked(p.ID) {
+			g.connectButton.Disable()
+		} else {
+			g.connectButton.Enable()
+		}
+		g.connectButton.Show()
 	}
-	g.connectButton.Enable()
-	g.disconnectButton.Disable()
 }
 
 func (g *GUI) updateRuntimeFieldState() {
