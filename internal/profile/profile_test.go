@@ -217,3 +217,118 @@ func TestFieldsChangedIgnoresTimestamps(t *testing.T) {
 		t.Fatal("name change should be detected")
 	}
 }
+
+func TestTailscaleConfigNormalizeDefaultsPortForwardProtocol(t *testing.T) {
+	config := TailscaleConfig{
+		PortForwards: []PortForward{
+			{ListenPort: 8443, TargetAddr: " 192.168.1.50:80 "},
+		},
+	}
+	config.Normalize()
+	if got, want := config.PortForwards[0].Protocol, PortForwardTCP; got != want {
+		t.Fatalf("Protocol = %q, want %q", got, want)
+	}
+	if got, want := config.PortForwards[0].TargetAddr, "192.168.1.50:80"; got != want {
+		t.Fatalf("TargetAddr = %q, want %q", got, want)
+	}
+}
+
+func TestTailscaleConfigValidateRejectsInvalidPortForward(t *testing.T) {
+	for name, mutate := range map[string]struct {
+		forwards []PortForward
+		wantErr  error
+	}{
+		"out of range port": {
+			forwards: []PortForward{{ListenPort: 70000, Protocol: PortForwardTCP, TargetAddr: "192.168.1.50:80"}},
+			wantErr:  ErrPortForwardPortOutOfRange,
+		},
+		"bad protocol": {
+			forwards: []PortForward{{ListenPort: 8443, Protocol: "bogus", TargetAddr: "192.168.1.50:80"}},
+			wantErr:  ErrPortForwardProtocolInvalid,
+		},
+		"empty target": {
+			forwards: []PortForward{{ListenPort: 8443, Protocol: PortForwardTCP, TargetAddr: ""}},
+			wantErr:  ErrPortForwardTargetRequired,
+		},
+		"unparsable target": {
+			forwards: []PortForward{{ListenPort: 8443, Protocol: PortForwardTCP, TargetAddr: "192.168.1.50"}},
+			wantErr:  ErrPortForwardTargetInvalid,
+		},
+		"duplicate listen port": {
+			forwards: []PortForward{
+				{ListenPort: 8443, Protocol: PortForwardTCP, TargetAddr: "192.168.1.50:80"},
+				{ListenPort: 8443, Protocol: PortForwardUDP, TargetAddr: "192.168.1.51:80"},
+			},
+			wantErr: ErrPortForwardDuplicatePort,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := TailscaleConfig{PortForwards: mutate.forwards}
+			err := config.Validate()
+			if !errors.Is(err, mutate.wantErr) {
+				t.Fatalf("expected %v, got %v", mutate.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestTailscaleConfigValidateAcceptsValidPortForward(t *testing.T) {
+	config := TailscaleConfig{
+		PortForwards: []PortForward{
+			{ListenPort: 8443, Protocol: PortForwardTCP, TargetAddr: "192.168.1.50:80"},
+			{ListenPort: 8444, Protocol: PortForwardUDP, TargetAddr: "192.168.1.51:53"},
+		},
+	}
+	err := config.Validate()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFieldsChangedDetectsPortForwardChanges(t *testing.T) {
+	before := NewTailscale("tailnet", 1080)
+	after := before
+	after.TailscaleConfig.PortForwards = []PortForward{
+		{ListenPort: 8443, Protocol: PortForwardTCP, TargetAddr: "192.168.1.50:80"},
+	}
+	if !FieldsChanged(before, after) {
+		t.Fatal("adding a port forward should be detected as a field change")
+	}
+}
+
+func TestRuntimeConfigChangedDetectsPortForwardChanges(t *testing.T) {
+	before := NewTailscale("tailnet", 1080)
+	after := before
+	after.TailscaleConfig.PortForwards = []PortForward{
+		{ListenPort: 8443, Protocol: PortForwardTCP, TargetAddr: "192.168.1.50:80"},
+	}
+	if !RuntimeConfigChanged(before, after) {
+		t.Fatal("port forward change should require a restart")
+	}
+}
+
+func TestExitNodeConfigChangedIgnoresPortForwardChanges(t *testing.T) {
+	before := NewTailscale("tailnet", 1080)
+	after := before
+	after.TailscaleConfig.PortForwards = []PortForward{
+		{ListenPort: 8443, Protocol: PortForwardTCP, TargetAddr: "192.168.1.50:80"},
+	}
+	if ExitNodeConfigChanged(before, after) {
+		t.Fatal("port forward changes should not be tracked as exit-node preference changes")
+	}
+}
+
+func TestTailscaleConfigIsZero(t *testing.T) {
+	if !(TailscaleConfig{}).IsZero() {
+		t.Fatal("zero-value TailscaleConfig should report IsZero() == true")
+	}
+	nonZero := TailscaleConfig{
+		PortForwards: []PortForward{{ListenPort: 8443, Protocol: PortForwardTCP, TargetAddr: "192.168.1.50:80"}},
+	}
+	if nonZero.IsZero() {
+		t.Fatal("TailscaleConfig with port forwards should report IsZero() == false")
+	}
+	if (TailscaleConfig{Hostname: "demo"}).IsZero() {
+		t.Fatal("TailscaleConfig with a hostname should report IsZero() == false")
+	}
+}

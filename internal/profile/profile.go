@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,16 +25,39 @@ const (
 )
 
 var (
-	ErrProfileNameRequired    = errors.New("profile name is required")
-	ErrSocksHostRequired      = errors.New("SOCKS5 host is required")
-	ErrSocksPortNotNumber     = errors.New("SOCKS5 port must be a number")
-	ErrSocksPortOutOfRange    = errors.New("SOCKS5 port must be between 1 and 65535")
-	ErrBackendKindInvalid     = errors.New("profile backend must be WireGuard or Tailscale")
-	ErrWireGuardConfigMissing = errors.New("WireGuard config is missing required fields")
-	ErrWireGuardConfigEmpty   = errors.New("WireGuard config is required")
-	ErrTailscaleExitNodeMode  = errors.New("tailscale exit node must be automatic or a specific node, not both")
-	ErrDuplicateBindAddress   = errors.New("duplicate SOCKS5 bind address")
+	ErrProfileNameRequired        = errors.New("profile name is required")
+	ErrSocksHostRequired          = errors.New("SOCKS5 host is required")
+	ErrSocksPortNotNumber         = errors.New("SOCKS5 port must be a number")
+	ErrSocksPortOutOfRange        = errors.New("SOCKS5 port must be between 1 and 65535")
+	ErrBackendKindInvalid         = errors.New("profile backend must be WireGuard or Tailscale")
+	ErrWireGuardConfigMissing     = errors.New("WireGuard config is missing required fields")
+	ErrWireGuardConfigEmpty       = errors.New("WireGuard config is required")
+	ErrTailscaleExitNodeMode      = errors.New("tailscale exit node must be automatic or a specific node, not both")
+	ErrDuplicateBindAddress       = errors.New("duplicate SOCKS5 bind address")
+	ErrPortForwardPortOutOfRange  = errors.New("port forward listen port must be between 1 and 65535")
+	ErrPortForwardProtocolInvalid = errors.New("port forward protocol must be tcp or udp")
+	ErrPortForwardTargetRequired  = errors.New("port forward target address is required")
+	ErrPortForwardTargetInvalid   = errors.New("port forward target address must be host:port")
+	ErrPortForwardDuplicatePort   = errors.New("duplicate port forward listen port")
 )
+
+// PortForwardProtocol identifies the transport protocol of a forward rule.
+type PortForwardProtocol string
+
+const (
+	PortForwardTCP PortForwardProtocol = "tcp"
+	PortForwardUDP PortForwardProtocol = "udp"
+)
+
+// PortForward describes one inbound-tailnet-IP-to-LAN relay rule: a
+// Tailscale peer dialing this node's tailnet IP at ListenPort is relayed to
+// TargetAddr (host:port) on the local network, using a plain net.Dial (not
+// node.Dial, since the target is not itself a tailnet peer).
+type PortForward struct {
+	ListenPort int
+	Protocol   PortForwardProtocol
+	TargetAddr string
+}
 
 type TailscaleConfig struct {
 	Hostname               string
@@ -44,6 +68,7 @@ type TailscaleConfig struct {
 	AutoExitNode           bool
 	ExitNodeAllowLANAccess bool
 	Ephemeral              bool
+	PortForwards           []PortForward
 }
 
 type Profile struct {
@@ -147,6 +172,13 @@ func (c *TailscaleConfig) Normalize() {
 	}
 	c.ControlURL = strings.TrimSpace(c.ControlURL)
 	c.ExitNode = strings.TrimSpace(c.ExitNode)
+	for i := range c.PortForwards {
+		c.PortForwards[i].TargetAddr = strings.TrimSpace(c.PortForwards[i].TargetAddr)
+		c.PortForwards[i].Protocol = PortForwardProtocol(strings.ToLower(strings.TrimSpace(string(c.PortForwards[i].Protocol))))
+		if c.PortForwards[i].Protocol == "" {
+			c.PortForwards[i].Protocol = PortForwardTCP
+		}
+	}
 }
 
 func (p *Profile) Touch() {
@@ -186,10 +218,63 @@ func (p Profile) Validate() error {
 }
 
 func (c TailscaleConfig) Validate() error {
+	var errs []error
 	if c.AutoExitNode && strings.TrimSpace(c.ExitNode) != "" {
-		return ErrTailscaleExitNodeMode
+		errs = append(errs, ErrTailscaleExitNodeMode)
 	}
-	return nil
+	seenPorts := map[int]bool{}
+	for _, forward := range c.PortForwards {
+		if forward.ListenPort < 1 || forward.ListenPort > 65535 {
+			errs = append(errs, ErrPortForwardPortOutOfRange)
+		}
+		switch forward.Protocol {
+		case PortForwardTCP, PortForwardUDP:
+		default:
+			errs = append(errs, ErrPortForwardProtocolInvalid)
+		}
+		target := strings.TrimSpace(forward.TargetAddr)
+		if target == "" {
+			errs = append(errs, ErrPortForwardTargetRequired)
+		} else {
+			_, _, err := net.SplitHostPort(target)
+			if err != nil {
+				errs = append(errs, ErrPortForwardTargetInvalid)
+			}
+		}
+		if seenPorts[forward.ListenPort] {
+			errs = append(errs, ErrPortForwardDuplicatePort)
+		}
+		seenPorts[forward.ListenPort] = true
+	}
+	return errors.Join(errs...)
+}
+
+// IsZero reports whether c is the zero-value TailscaleConfig.
+func (c TailscaleConfig) IsZero() bool {
+	return c.Hostname == "" &&
+		c.AuthKey == "" &&
+		!c.Authenticated &&
+		c.ControlURL == "" &&
+		c.ExitNode == "" &&
+		!c.AutoExitNode &&
+		!c.ExitNodeAllowLANAccess &&
+		!c.Ephemeral &&
+		len(c.PortForwards) == 0
+}
+
+// tailscaleConfigEqual compares every TailscaleConfig field explicitly,
+// since the presence of the PortForwards slice makes the struct
+// non-comparable with ==/!=.
+func tailscaleConfigEqual(before, after TailscaleConfig) bool {
+	return before.Hostname == after.Hostname &&
+		before.AuthKey == after.AuthKey &&
+		before.Authenticated == after.Authenticated &&
+		before.ControlURL == after.ControlURL &&
+		before.ExitNode == after.ExitNode &&
+		before.AutoExitNode == after.AutoExitNode &&
+		before.ExitNodeAllowLANAccess == after.ExitNodeAllowLANAccess &&
+		before.Ephemeral == after.Ephemeral &&
+		slices.Equal(before.PortForwards, after.PortForwards)
 }
 
 func (p Profile) IsWireGuard() bool {
@@ -337,7 +422,8 @@ func tailscaleRestartConfigChanged(before, after TailscaleConfig) bool {
 	return before.Hostname != after.Hostname ||
 		before.AuthKey != after.AuthKey ||
 		before.ControlURL != after.ControlURL ||
-		before.Ephemeral != after.Ephemeral
+		before.Ephemeral != after.Ephemeral ||
+		!slices.Equal(before.PortForwards, after.PortForwards)
 }
 
 // ExitNodeConfigChanged reports whether the live-updatable Tailscale exit-node
@@ -360,7 +446,7 @@ func FieldsChanged(before, after Profile) bool {
 	return before.Kind != after.Kind ||
 		before.Name != after.Name ||
 		before.WireGuardConfig != after.WireGuardConfig ||
-		before.TailscaleConfig != after.TailscaleConfig ||
+		!tailscaleConfigEqual(before.TailscaleConfig, after.TailscaleConfig) ||
 		before.SocksHost != after.SocksHost ||
 		before.SocksPort != after.SocksPort ||
 		before.AutoStart != after.AutoStart
