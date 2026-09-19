@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -256,6 +257,57 @@ func TestProfileFromFormMapsExitNodeLabelToStableID(t *testing.T) {
 	}
 	if got.TailscaleConfig.ExitNode != "stable-exit" {
 		t.Fatalf("ExitNode = %q", got.TailscaleConfig.ExitNode)
+	}
+}
+
+func TestProfileFromFormIncludesPortForwards(t *testing.T) {
+	item := profile.NewTailscale("demo", 1080)
+	gui, _ := newProfilesTestGUI(t, item)
+	gui.tsPortForwards = []profile.PortForward{
+		{ListenPort: 8080, Protocol: profile.PortForwardTCP, TargetAddr: "192.168.1.10:80"},
+		{ListenPort: 5353, Protocol: profile.PortForwardUDP, TargetAddr: "192.168.1.11:53"},
+	}
+	got, err := gui.profileFromForm(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []profile.PortForward{
+		{ListenPort: 8080, Protocol: profile.PortForwardTCP, TargetAddr: "192.168.1.10:80"},
+		{ListenPort: 5353, Protocol: profile.PortForwardUDP, TargetAddr: "192.168.1.11:53"},
+	}
+	if !reflect.DeepEqual(got.TailscaleConfig.PortForwards, want) {
+		t.Fatalf("PortForwards = %#v, want %#v", got.TailscaleConfig.PortForwards, want)
+	}
+}
+
+func TestSetTailscaleFormPopulatesPortForwards(t *testing.T) {
+	gui, _ := newProfilesTestGUI(t)
+	input := []profile.PortForward{
+		{ListenPort: 8080, Protocol: profile.PortForwardTCP, TargetAddr: "192.168.1.10:80"},
+	}
+	config := profile.TailscaleConfig{PortForwards: input}
+	gui.setTailscaleForm(config)
+	if len(gui.tsPortForwards) != 1 || gui.tsPortForwards[0] != input[0] {
+		t.Fatalf("tsPortForwards = %#v", gui.tsPortForwards)
+	}
+	// Mutate the input slice after the call; gui.tsPortForwards must be unaffected (defensive copy).
+	input[0].TargetAddr = "mutated"
+	if gui.tsPortForwards[0].TargetAddr == "mutated" {
+		t.Fatalf("setTailscaleForm aliased the input slice: %#v", gui.tsPortForwards)
+	}
+}
+
+func TestAddPortForwardFromInputsValidatesPort(t *testing.T) {
+	gui, _ := newProfilesTestGUI(t)
+	gui.tsPortForwardPort.SetText("not-a-number")
+	gui.tsPortForwardProto.SetSelected(string(profile.PortForwardTCP))
+	gui.tsPortForwardTarget.SetText("192.168.1.10:80")
+	err := gui.addPortForwardFromInputs()
+	if !errors.Is(err, profile.ErrPortForwardPortOutOfRange) {
+		t.Fatalf("addPortForwardFromInputs() error = %v", err)
+	}
+	if len(gui.tsPortForwards) != 0 {
+		t.Fatalf("tsPortForwards mutated on invalid input: %#v", gui.tsPortForwards)
 	}
 }
 

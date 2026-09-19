@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -99,8 +100,56 @@ func TestRepositoryRoundTripPreservesTailscaleDomainFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0] != item {
+	if len(got) != 1 || !reflect.DeepEqual(got[0], item) {
 		t.Fatalf("Tailscale round trip = %#v, want %#v", got, item)
+	}
+}
+
+func TestRepositoryRoundTripPreservesPortForwards(t *testing.T) {
+	item := profile.NewTailscale("tailnet", 1080)
+	item.AutoStart = true
+	item.TailscaleConfig = profile.TailscaleConfig{
+		Hostname: "proxy-node",
+		AuthKey:  "tskey-auth-example",
+		PortForwards: []profile.PortForward{
+			{ListenPort: 8080, Protocol: profile.PortForwardTCP, TargetAddr: "192.168.1.10:8080"},
+			{ListenPort: 5353, Protocol: profile.PortForwardUDP, TargetAddr: "192.168.1.11:53"},
+		},
+	}
+	repository := NewRepository(filepath.Join(t.TempDir(), "profiles.json"))
+	err := repository.Save([]profile.Profile{item})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := repository.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !reflect.DeepEqual(got[0], item) {
+		t.Fatalf("PortForwards round trip = %#v, want %#v", got, item)
+	}
+	if !reflect.DeepEqual(got[0].TailscaleConfig.PortForwards, item.TailscaleConfig.PortForwards) {
+		t.Fatalf("PortForwards = %#v, want %#v", got[0].TailscaleConfig.PortForwards, item.TailscaleConfig.PortForwards)
+	}
+}
+
+func TestFromDomainProfileOmitsEmptyPortForwards(t *testing.T) {
+	item := profile.NewTailscale("tailnet", 1080)
+	item.TailscaleConfig.Hostname = "proxy-node"
+	data, err := EncodeBundle([]profile.Profile{item})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"port_forwards"`) {
+		t.Fatalf("empty PortForwards should be omitted from encoded JSON: %s", data)
+	}
+	var stored bundle
+	err = json.Unmarshal(data, &stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Profiles) != 1 || stored.Profiles[0].TailscaleConfig == nil || stored.Profiles[0].TailscaleConfig.PortForwards != nil {
+		t.Fatalf("unexpected stored PortForwards: %#v", stored.Profiles)
 	}
 }
 
@@ -156,6 +205,9 @@ func TestCodecEncodeExportClearsLocalTailscaleAuthentication(t *testing.T) {
 	item := profile.NewTailscale("tailnet", 1080)
 	item.TailscaleConfig.Authenticated = true
 	item.TailscaleConfig.AuthKey = "tskey-auth-example"
+	item.TailscaleConfig.PortForwards = []profile.PortForward{
+		{ListenPort: 8080, Protocol: profile.PortForwardTCP, TargetAddr: "192.168.1.10:8080"},
+	}
 	data, err := (Codec{}).EncodeExport([]profile.Profile{item})
 	if err != nil {
 		t.Fatal(err)
@@ -167,6 +219,10 @@ func TestCodecEncodeExportClearsLocalTailscaleAuthentication(t *testing.T) {
 	}
 	if len(stored.Profiles) != 1 || stored.Profiles[0].TailscaleConfig == nil || stored.Profiles[0].TailscaleConfig.Authenticated || stored.Profiles[0].TailscaleConfig.AuthKey != "" {
 		t.Fatalf("export leaked local authentication state: %#v", stored.Profiles)
+	}
+	wantForwards := []storedPortForward{{ListenPort: 8080, Protocol: "tcp", TargetAddr: "192.168.1.10:8080"}}
+	if !reflect.DeepEqual(stored.Profiles[0].TailscaleConfig.PortForwards, wantForwards) {
+		t.Fatalf("export corrupted PortForwards: %#v, want %#v", stored.Profiles[0].TailscaleConfig.PortForwards, wantForwards)
 	}
 }
 

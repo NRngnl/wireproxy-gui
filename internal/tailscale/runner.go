@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -98,6 +99,8 @@ type tsNode interface {
 	Up(context.Context) (*ipnstate.Status, error)
 	LocalClient() (localClient, error)
 	Dial(context.Context, string, string) (net.Conn, error)
+	Listen(network, addr string) (net.Listener, error)
+	ListenPacket(network, addr string) (net.PacketConn, error)
 	Close() error
 }
 
@@ -123,6 +126,14 @@ func (n *realNode) Dial(ctx context.Context, network, address string) (net.Conn,
 	return n.server.Dial(ctx, network, address)
 }
 
+func (n *realNode) Listen(network, addr string) (net.Listener, error) {
+	return n.server.Listen(network, addr)
+}
+
+func (n *realNode) ListenPacket(network, addr string) (net.PacketConn, error) {
+	return n.server.ListenPacket(network, addr)
+}
+
 func (n *realNode) Close() (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -136,11 +147,12 @@ type process struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	mu       sync.Mutex
-	doneOnce sync.Once
-	closed   bool
-	listener net.Listener
-	node     tsNode
+	mu           sync.Mutex
+	doneOnce     sync.Once
+	closed       bool
+	listener     net.Listener
+	node         tsNode
+	forwardConns []io.Closer // TCP listeners and UDP PacketConns for active port forwards
 }
 
 func NewRunner() *Runner {
@@ -321,6 +333,12 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	if !proc.commitStart() {
 		return context.Canceled
 	}
+
+	err = r.startPortForwards(procCtx, p, runningNode, proc)
+	if err != nil {
+		return err
+	}
+
 	started = true
 	r.emit(EventStarted, p, "connected on "+p.BindAddress())
 
@@ -761,6 +779,187 @@ func (r *Runner) runSocks5(_ context.Context, node tsNode, listener net.Listener
 	return server.Serve(listener)
 }
 
+// startPortForwards binds a listener (TCP) or packet conn (UDP) for every
+// configured PortForward rule and launches its relay loop in its own
+// goroutine. It does not block waiting for the relay loops. Any bind
+// failure aborts immediately and returns the error so Start() can fail the
+// whole profile start.
+func (r *Runner) startPortForwards(ctx context.Context, p profile.Profile, node tsNode, proc *process) error {
+	for _, rule := range p.TailscaleConfig.PortForwards {
+		addr := fmt.Sprintf(":%d", rule.ListenPort)
+		switch rule.Protocol {
+		case profile.PortForwardUDP:
+			packetConn, err := node.ListenPacket("udp", addr)
+			if err != nil {
+				return fmt.Errorf("listen UDP port forward on %s: %w", addr, err)
+			}
+			if !proc.addForwardCloser(packetConn) {
+				return context.Canceled
+			}
+			go r.relayUDPForward(ctx, node, packetConn, rule)
+		default:
+			listener, err := node.Listen("tcp", addr)
+			if err != nil {
+				return fmt.Errorf("listen TCP port forward on %s: %w", addr, err)
+			}
+			if !proc.addForwardCloser(listener) {
+				return context.Canceled
+			}
+			go r.relayTCPForward(ctx, node, listener, rule)
+		}
+	}
+	return nil
+}
+
+// relayTCPForward accepts connections on listener and relays each one to
+// rule.TargetAddr on the local network via a plain net.Dial (not
+// node.Dial, since the LAN target is not itself a tailnet peer). It does
+// not emit EventStopped/EventError-for-cancellation or call
+// r.removeProcess; only the SOCKS5 goroutine owns overall process teardown.
+// It emits EventError for operational failures that are not due to context
+// cancellation or a closed listener.
+func (r *Runner) relayTCPForward(ctx context.Context, _ tsNode, listener net.Listener, rule profile.PortForward) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			r.emitForwardError(rule, err)
+			return
+		}
+		go relayTCPConn(ctx, conn, rule.TargetAddr)
+	}
+}
+
+// relayTCPConn dials rule's target and relays bytes bidirectionally between
+// conn and the target connection, closing both sides when either direction
+// finishes or ctx is canceled.
+func relayTCPConn(ctx context.Context, conn net.Conn, targetAddr string) {
+	defer conn.Close()
+	target, err := net.Dial("tcp", targetAddr)
+	if err != nil {
+		return
+	}
+	defer target.Close()
+
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+			_ = target.Close()
+		case <-done:
+		}
+	}()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(target, conn)
+		_ = target.Close()
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(conn, target)
+		_ = conn.Close()
+	}()
+	wg.Wait()
+	close(done)
+}
+
+// relayUDPForward implements a NAT-style UDP relay: datagrams read from
+// packetConn are keyed by source address, and each new source gets its own
+// dial to rule.TargetAddr (plain net.Dial, not node.Dial) whose replies are
+// written back out through packetConn.WriteTo. All session goroutines exit
+// when ctx is canceled.
+func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.PacketConn, rule profile.PortForward) {
+	go func() {
+		<-ctx.Done()
+		_ = packetConn.Close()
+	}()
+
+	type udpSession struct {
+		conn net.Conn
+	}
+
+	var mu sync.Mutex
+	sessions := map[string]*udpSession{}
+
+	buf := make([]byte, 64*1024)
+	for {
+		n, srcAddr, err := packetConn.ReadFrom(buf)
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			r.emitForwardError(rule, err)
+			return
+		}
+		payload := make([]byte, n)
+		copy(payload, buf[:n])
+
+		key := srcAddr.String()
+		mu.Lock()
+		sess, ok := sessions[key]
+		if !ok {
+			targetConn, dialErr := net.Dial("udp", rule.TargetAddr)
+			if dialErr != nil {
+				mu.Unlock()
+				continue
+			}
+			sess = &udpSession{conn: targetConn}
+			sessions[key] = sess
+			go func(source net.Addr, session *udpSession) {
+				defer func() {
+					_ = session.conn.Close()
+					mu.Lock()
+					delete(sessions, key)
+					mu.Unlock()
+				}()
+				go func() {
+					<-ctx.Done()
+					_ = session.conn.Close()
+				}()
+				replyBuf := make([]byte, 64*1024)
+				for {
+					rn, readErr := session.conn.Read(replyBuf)
+					if rn > 0 {
+						_, _ = packetConn.WriteTo(replyBuf[:rn], source)
+					}
+					if readErr != nil {
+						return
+					}
+					if ctx.Err() != nil {
+						return
+					}
+				}
+			}(srcAddr, sess)
+		}
+		mu.Unlock()
+
+		_, _ = sess.conn.Write(payload)
+	}
+}
+
+// emitForwardError emits an EventError for a port-forward loop failure.
+// It has no profile.Profile to attach (relayTCPForward/relayUDPForward
+// intentionally do not take one per the implementation plan), so it sends
+// the event directly rather than via Runner.emit.
+func (r *Runner) emitForwardError(rule profile.PortForward, err error) {
+	message := fmt.Sprintf("port forward %s/%d: %v", rule.Protocol, rule.ListenPort, err)
+	event := Event{
+		Type:    EventError,
+		Message: message,
+		At:      time.Now(),
+	}
+	select {
+	case r.events <- event:
+	default:
+	}
+}
+
 type socksReplyConn struct {
 	net.Conn
 }
@@ -822,6 +1021,20 @@ func (p *process) setNode(node tsNode) bool {
 	return true
 }
 
+func (p *process) addForwardCloser(c io.Closer) bool {
+	p.mu.Lock()
+	closed := p.closed
+	if !closed {
+		p.forwardConns = append(p.forwardConns, c)
+	}
+	p.mu.Unlock()
+	if closed {
+		_ = c.Close()
+		return false
+	}
+	return true
+}
+
 func (p *process) commitStart() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -844,6 +1057,7 @@ func (p *process) close() {
 	cancel := p.cancel
 	listener := p.listener
 	node := p.node
+	forwardConns := p.forwardConns
 	p.mu.Unlock()
 
 	cancel()
@@ -852,6 +1066,9 @@ func (p *process) close() {
 	}
 	if node != nil {
 		_ = node.Close()
+	}
+	for _, c := range forwardConns {
+		_ = c.Close()
 	}
 }
 

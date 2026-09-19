@@ -104,6 +104,12 @@ type GUI struct {
 	tsAutoExit          *widget.Check
 	tsAllowLAN          *widget.Check
 	tsEphemeral         *widget.Check
+	tsPortForwards      []profile.PortForward
+	tsPortForwardList   *widget.List
+	tsPortForwardAdd    *widget.Button
+	tsPortForwardPort   *widget.Entry
+	tsPortForwardProto  *widget.Select
+	tsPortForwardTarget *widget.Entry
 	logLabel            *widget.Label
 	logScroll           *container.Scroll
 	logTail             bool
@@ -383,6 +389,40 @@ func (g *GUI) setupTailscaleForm() {
 	g.tsEphemeral = widget.NewCheck(tr("Register as ephemeral node"), nil)
 	authKeyControl := container.NewBorder(nil, nil, nil, g.tsLoginButton, g.tsAuthKey)
 	exitNodeControl := container.NewBorder(nil, nil, nil, g.tsExitRefresh, g.tsExitNode)
+
+	g.tsPortForwardPort = widget.NewEntry()
+	g.tsPortForwardPort.SetPlaceHolder(tr("Listen port"))
+	g.tsPortForwardProto = widget.NewSelect([]string{string(profile.PortForwardTCP), string(profile.PortForwardUDP)}, nil)
+	g.tsPortForwardProto.SetSelected(string(profile.PortForwardTCP))
+	g.tsPortForwardTarget = widget.NewEntry()
+	g.tsPortForwardTarget.SetPlaceHolder(tr("Target address, e.g. 192.168.1.10:80"))
+	g.tsPortForwardAdd = widget.NewButtonWithIcon(tr("Add"), theme.ContentAddIcon(), func() {
+		if err := g.addPortForwardFromInputs(); err != nil {
+			g.showError("Add port forward", err)
+		}
+	})
+	g.tsPortForwardList = widget.NewList(
+		func() int { return len(g.tsPortForwards) },
+		func() fyne.CanvasObject {
+			return container.NewBorder(nil, nil, nil, widget.NewButtonWithIcon("", theme.DeleteIcon(), nil), widget.NewLabel(""))
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			row := obj.(*fyne.Container)
+			label := row.Objects[0].(*widget.Label)
+			removeButton := row.Objects[1].(*widget.Button)
+			if id < 0 || id >= len(g.tsPortForwards) {
+				return
+			}
+			forward := g.tsPortForwards[id]
+			label.SetText(fmt.Sprintf("%s %d -> %s", forward.Protocol, forward.ListenPort, forward.TargetAddr))
+			index := id
+			removeButton.OnTapped = func() {
+				g.removePortForward(index)
+			}
+		},
+	)
+	portForwardAddRow := container.NewBorder(nil, nil, nil, g.tsPortForwardAdd, container.NewGridWithColumns(3, g.tsPortForwardPort, g.tsPortForwardProto, g.tsPortForwardTarget))
+	portForwardSection := container.NewVBox(portForwardAddRow, g.tsPortForwardList)
 	g.tailscaleForm = &widget.Form{
 		Items: []*widget.FormItem{
 			{
@@ -412,6 +452,11 @@ func (g *GUI) setupTailscaleForm() {
 			},
 			{Text: tr("LAN access"), Widget: g.tsAllowLAN},
 			{Text: tr("Node lifetime"), Widget: g.tsEphemeral},
+			{
+				Text:     tr("Port forwards"),
+				Widget:   portForwardSection,
+				HintText: tr("Relays this node's tailnet IP at the listen port to a local network address."),
+			},
 		},
 	}
 }
@@ -464,7 +509,42 @@ func (g *GUI) setTailscaleForm(config profile.TailscaleConfig) {
 	g.tsAutoExit.SetChecked(config.AutoExitNode)
 	g.tsAllowLAN.SetChecked(config.ExitNodeAllowLANAccess)
 	g.tsEphemeral.SetChecked(config.Ephemeral)
+	g.tsPortForwards = append([]profile.PortForward(nil), config.PortForwards...)
+	g.refreshPortForwardList()
 	g.updateTailscaleAuthControlState(config)
+}
+
+func (g *GUI) addPortForwardFromInputs() error {
+	port, err := strconv.Atoi(strings.TrimSpace(g.tsPortForwardPort.Text))
+	if err != nil {
+		return profile.ErrPortForwardPortOutOfRange
+	}
+	forward := profile.PortForward{
+		ListenPort: port,
+		Protocol:   profile.PortForwardProtocol(g.tsPortForwardProto.Selected),
+		TargetAddr: strings.TrimSpace(g.tsPortForwardTarget.Text),
+	}
+	g.tsPortForwards = append(g.tsPortForwards, forward)
+	g.refreshPortForwardList()
+	g.tsPortForwardPort.SetText("")
+	g.tsPortForwardTarget.SetText("")
+	g.tsPortForwardProto.SetSelected(string(profile.PortForwardTCP))
+	return nil
+}
+
+func (g *GUI) removePortForward(index int) {
+	if index < 0 || index >= len(g.tsPortForwards) {
+		return
+	}
+	g.tsPortForwards = append(g.tsPortForwards[:index], g.tsPortForwards[index+1:]...)
+	g.refreshPortForwardList()
+}
+
+func (g *GUI) refreshPortForwardList() {
+	if g.tsPortForwardList == nil {
+		return
+	}
+	g.tsPortForwardList.Refresh()
 }
 
 func (g *GUI) updateTailscaleAuthControlState(config profile.TailscaleConfig) {
@@ -1421,6 +1501,7 @@ func (g *GUI) profileFromForm(existing profile.Profile) (profile.Profile, error)
 			AutoExitNode:           g.tsAutoExit.Checked,
 			ExitNodeAllowLANAccess: g.tsAllowLAN.Checked,
 			Ephemeral:              g.tsEphemeral.Checked,
+			PortForwards:           append([]profile.PortForward(nil), g.tsPortForwards...),
 		}
 	} else {
 		existing.Kind = profile.BackendWireGuard

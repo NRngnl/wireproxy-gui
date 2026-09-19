@@ -22,15 +22,26 @@ type bundle struct {
 	Profiles []storedProfile `json:"profiles"`
 }
 
+type storedPortForward struct {
+	ListenPort int    `json:"listen_port"`
+	Protocol   string `json:"protocol"`
+	TargetAddr string `json:"target_addr"`
+}
+
+// storedTailscaleConfig's PortForwards field was added after the initial
+// schema version 1 shipped. Old JSON files with no "port_forwards" key
+// still load correctly: json.Unmarshal simply leaves the slice field nil
+// when the key is missing, so no explicit migration code is needed.
 type storedTailscaleConfig struct {
-	Hostname               string `json:"hostname,omitempty"`
-	AuthKey                string `json:"auth_key,omitempty"`
-	Authenticated          bool   `json:"authenticated,omitempty"`
-	ControlURL             string `json:"control_url,omitempty"`
-	ExitNode               string `json:"exit_node,omitempty"`
-	AutoExitNode           bool   `json:"auto_exit_node,omitempty"`
-	ExitNodeAllowLANAccess bool   `json:"exit_node_allow_lan_access,omitempty"`
-	Ephemeral              bool   `json:"ephemeral,omitempty"`
+	Hostname               string              `json:"hostname,omitempty"`
+	AuthKey                string              `json:"auth_key,omitempty"`
+	Authenticated          bool                `json:"authenticated,omitempty"`
+	ControlURL             string              `json:"control_url,omitempty"`
+	ExitNode               string              `json:"exit_node,omitempty"`
+	AutoExitNode           bool                `json:"auto_exit_node,omitempty"`
+	ExitNodeAllowLANAccess bool                `json:"exit_node_allow_lan_access,omitempty"`
+	Ephemeral              bool                `json:"ephemeral,omitempty"`
+	PortForwards           []storedPortForward `json:"port_forwards,omitempty"`
 }
 
 type storedProfile struct {
@@ -224,7 +235,7 @@ func fromDomainProfile(item profile.Profile) storedProfile {
 		CreatedAt:       item.CreatedAt,
 		UpdatedAt:       item.UpdatedAt,
 	}
-	if item.IsTailscale() || item.TailscaleConfig != (profile.TailscaleConfig{}) {
+	if item.IsTailscale() || !item.TailscaleConfig.IsZero() {
 		stored.TailscaleConfig = &storedTailscaleConfig{
 			Hostname:               item.TailscaleConfig.Hostname,
 			AuthKey:                item.TailscaleConfig.AuthKey,
@@ -234,7 +245,23 @@ func fromDomainProfile(item profile.Profile) storedProfile {
 			AutoExitNode:           item.TailscaleConfig.AutoExitNode,
 			ExitNodeAllowLANAccess: item.TailscaleConfig.ExitNodeAllowLANAccess,
 			Ephemeral:              item.TailscaleConfig.Ephemeral,
+			PortForwards:           fromDomainPortForwards(item.TailscaleConfig.PortForwards),
 		}
+	}
+	return stored
+}
+
+func fromDomainPortForwards(rules []profile.PortForward) []storedPortForward {
+	if len(rules) == 0 {
+		return nil
+	}
+	stored := make([]storedPortForward, 0, len(rules))
+	for _, rule := range rules {
+		stored = append(stored, storedPortForward{
+			ListenPort: rule.ListenPort,
+			Protocol:   string(rule.Protocol),
+			TargetAddr: rule.TargetAddr,
+		})
 	}
 	return stored
 }
@@ -269,7 +296,23 @@ func (item storedProfile) toDomain() profile.Profile {
 			AutoExitNode:           item.TailscaleConfig.AutoExitNode,
 			ExitNodeAllowLANAccess: item.TailscaleConfig.ExitNodeAllowLANAccess,
 			Ephemeral:              item.TailscaleConfig.Ephemeral,
+			PortForwards:           toDomainPortForwards(item.TailscaleConfig.PortForwards),
 		}
+	}
+	return domain
+}
+
+func toDomainPortForwards(rules []storedPortForward) []profile.PortForward {
+	if len(rules) == 0 {
+		return nil
+	}
+	domain := make([]profile.PortForward, 0, len(rules))
+	for _, rule := range rules {
+		domain = append(domain, profile.PortForward{
+			ListenPort: rule.ListenPort,
+			Protocol:   profile.PortForwardProtocol(rule.Protocol),
+			TargetAddr: rule.TargetAddr,
+		})
 	}
 	return domain
 }
@@ -311,5 +354,5 @@ func hasImportProfileContent(item profile.Profile) bool {
 	}
 	item.TailscaleConfig.Normalize()
 	item.TailscaleConfig.Authenticated = false
-	return item.IsTailscale() && (item.TailscaleConfig != profile.TailscaleConfig{})
+	return item.IsTailscale() && !item.TailscaleConfig.IsZero()
 }

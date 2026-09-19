@@ -23,8 +23,10 @@ import (
 )
 
 var (
-	errTestUp         = errors.New("up failed")
-	errUnexpectedDial = errors.New("unexpected dial")
+	errTestUp                 = errors.New("up failed")
+	errUnexpectedDial         = errors.New("unexpected dial")
+	errUnexpectedListen       = errors.New("unexpected listen")
+	errUnexpectedListenPacket = errors.New("unexpected listen packet")
 )
 
 func TestStartRejectsWireGuardProfile(t *testing.T) {
@@ -957,6 +959,9 @@ type fakeTSNode struct {
 	client   localClient
 	dialFunc func(context.Context, string, string) (net.Conn, error)
 
+	listenFunc       func(network, addr string) (net.Listener, error)
+	listenPacketFunc func(network, addr string) (net.PacketConn, error)
+
 	closeCalls int
 }
 
@@ -989,6 +994,20 @@ func (n *fakeTSNode) Dial(ctx context.Context, network, address string) (net.Con
 		return n.dialFunc(ctx, network, address)
 	}
 	return nil, errUnexpectedDial
+}
+
+func (n *fakeTSNode) Listen(network, addr string) (net.Listener, error) {
+	if n.listenFunc != nil {
+		return n.listenFunc(network, addr)
+	}
+	return nil, errUnexpectedListen
+}
+
+func (n *fakeTSNode) ListenPacket(network, addr string) (net.PacketConn, error) {
+	if n.listenPacketFunc != nil {
+		return n.listenPacketFunc(network, addr)
+	}
+	return nil, errUnexpectedListenPacket
 }
 
 func (n *fakeTSNode) Close() error {
