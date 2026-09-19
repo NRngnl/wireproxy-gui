@@ -804,6 +804,151 @@ func TestRunSocks5PreservesHostnameDestination(t *testing.T) {
 	}
 }
 
+// TestRunSocks5RoutesUDPAssociateThroughNode is a regression test for the SOCKS5
+// UDP ASSOCIATE relay: go-socks5's handleAssociate only consults the WithDial
+// callback (never WithDialAndRequest, which is CONNECT-only), so without
+// wiring WithDial to node.Dial, UDP ASSOCIATE would still be accepted at the
+// protocol layer but silently fall back to a bare net.Dial that never reaches
+// the tailnet. This drives a real UDP ASSOCIATE handshake end to end and
+// asserts the datagram was relayed through node.Dial with network "udp".
+func TestRunSocks5RoutesUDPAssociateThroughNode(t *testing.T) {
+	runner := NewRunner()
+	bg := context.Background()
+	var lc net.ListenConfig
+	tcpListener, err := lc.Listen(bg, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tcpListener.Close()
+
+	targetUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer targetUDP.Close()
+
+	type dialRequest struct {
+		network string
+		address string
+	}
+	dialed := make(chan dialRequest, 1)
+	var dialer net.Dialer
+	node := &fakeTSNode{
+		dialFunc: func(ctx context.Context, network, address string) (net.Conn, error) {
+			dialed <- dialRequest{network: network, address: address}
+			conn, dialErr := dialer.DialContext(ctx, network, address)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			go func() {
+				<-ctx.Done()
+				_ = conn.Close()
+			}()
+			return conn, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runner.runSocks5(ctx, node, tcpListener)
+	}()
+
+	controlConn, err := dialer.DialContext(ctx, "tcp", tcpListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlConn.Close()
+	err = controlConn.SetDeadline(time.Now().Add(2 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = controlConn.Write([]byte{0x05, 0x01, 0x00})
+	if err != nil {
+		t.Fatal(err)
+	}
+	greeting := make([]byte, 2)
+	_, err = io.ReadFull(controlConn, greeting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if greeting[0] != 0x05 || greeting[1] != 0x00 {
+		t.Fatalf("SOCKS greeting reply = %#v, want version 5 no auth", greeting)
+	}
+
+	// UDP ASSOCIATE request: CMD=0x03, ATYP=IPv4 0.0.0.0:0 (client doesn't
+	// know its own UDP source yet).
+	associateRequest := []byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
+	_, err = controlConn.Write(associateRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	associateReply := make([]byte, 10)
+	_, err = io.ReadFull(controlConn, associateReply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if associateReply[0] != 0x05 || associateReply[1] != 0x00 {
+		t.Fatalf("SOCKS associate reply = %#v, want success", associateReply)
+	}
+	relayPort := int(associateReply[8])<<8 | int(associateReply[9])
+	relayAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: relayPort}
+
+	udpClient, err := net.DialUDP("udp", nil, relayAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udpClient.Close()
+
+	targetAddr := targetUDP.LocalAddr().(*net.UDPAddr)
+	payload := []byte("udp-through-tsnet")
+	datagram := []byte{0, 0, 0, 0x01, 127, 0, 0, 1, byte(targetAddr.Port >> 8), byte(targetAddr.Port)}
+	datagram = append(datagram, payload...)
+	_, err = udpClient.Write(datagram)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-dialed:
+		if got.network != "udp" {
+			t.Fatalf("network = %q, want udp", got.network)
+		}
+		if got.address != targetAddr.String() {
+			t.Fatalf("dial address = %q, want %q", got.address, targetAddr.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("node was not dialed for UDP ASSOCIATE relay")
+	}
+
+	err = targetUDP.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 64)
+	n, _, err := targetUDP.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("target did not receive relayed UDP payload: %v", err)
+	}
+	if string(buf[:n]) != string(payload) {
+		t.Fatalf("relayed payload = %q, want %q", buf[:n], payload)
+	}
+
+	cancel()
+	_ = controlConn.Close()
+	_ = tcpListener.Close()
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("runSocks5 error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSocks5 did not stop")
+	}
+}
+
 type fakeTSNode struct {
 	upErr    error
 	upFunc   func()

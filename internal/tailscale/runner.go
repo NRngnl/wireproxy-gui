@@ -744,6 +744,18 @@ func (r *Runner) runSocks5(_ context.Context, node tsNode, listener net.Listener
 			}
 			return socksReplyConn{Conn: conn}, nil
 		}),
+		// WithDial backs SOCKS5 UDP ASSOCIATE (go-socks5's handleAssociate reads
+		// only the WithDial callback, never the WithDialAndRequest one used above
+		// for CONNECT). Without this, go-socks5's default RuleSet still accepts
+		// UDP ASSOCIATE requests but silently falls back to a bare net.Dial that
+		// never touches the tsnet node, so relayed UDP datagrams would leave over
+		// the host's real network instead of the tailnet. Routing it through
+		// node.Dial makes UDP (e.g. game/media streams) reach tailnet peers the
+		// same way TCP CONNECT already does.
+		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return node.Dial(ctx, network, addr)
+		}),
+		socks5.WithRule(socks5.NewPermitConnAndAss()),
 		socks5.WithBufferPool(bufferpool.NewPool(256*1024)),
 	)
 	return server.Serve(listener)
