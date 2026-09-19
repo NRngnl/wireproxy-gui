@@ -837,7 +837,8 @@ func (r *Runner) relayTCPForward(ctx context.Context, _ tsNode, listener net.Lis
 // finishes or ctx is canceled.
 func relayTCPConn(ctx context.Context, conn net.Conn, targetAddr string) {
 	defer conn.Close()
-	target, err := net.Dial("tcp", targetAddr)
+	var dialer net.Dialer
+	target, err := dialer.DialContext(ctx, "tcp", targetAddr)
 	if err != nil {
 		return
 	}
@@ -904,7 +905,8 @@ func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.P
 		mu.Lock()
 		sess, ok := sessions[key]
 		if !ok {
-			targetConn, dialErr := net.Dial("udp", rule.TargetAddr)
+			var dialer net.Dialer
+			targetConn, dialErr := dialer.DialContext(ctx, "udp", rule.TargetAddr)
 			if dialErr != nil {
 				mu.Unlock()
 				continue

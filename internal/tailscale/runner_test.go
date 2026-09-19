@@ -27,6 +27,7 @@ var (
 	errUnexpectedDial         = errors.New("unexpected dial")
 	errUnexpectedListen       = errors.New("unexpected listen")
 	errUnexpectedListenPacket = errors.New("unexpected listen packet")
+	errForwardListen          = errors.New("forward listen failed")
 )
 
 func TestStartRejectsWireGuardProfile(t *testing.T) {
@@ -220,6 +221,290 @@ func TestStopAfterNodeReadyBeforeStartedDoesNotEmitStarted(t *testing.T) {
 		t.Fatalf("node close calls = %d, want 1", node.closeCalls)
 	}
 	assertNoStartedEvent(t, runner.Events())
+}
+
+func TestStartPortForwardsBindsEachConfiguredRule(t *testing.T) {
+	runner := NewRunner()
+	runner.stateDir = t.TempDir()
+	listener := newFakeListener()
+
+	type listenCall struct {
+		network string
+		addr    string
+	}
+	var mu sync.Mutex
+	var listenCalls []listenCall
+	var packetCalls []listenCall
+
+	forwardListener := newFakeListener()
+	forwardPacketConn := &fakePacketConn{closed: make(chan struct{})}
+	node := &fakeTSNode{
+		client: &fakeLocalClient{prefs: ipn.NewPrefs(), status: &ipnstate.Status{}},
+		listenFunc: func(network, addr string) (net.Listener, error) {
+			mu.Lock()
+			listenCalls = append(listenCalls, listenCall{network: network, addr: addr})
+			mu.Unlock()
+			return forwardListener, nil
+		},
+		listenPacketFunc: func(network, addr string) (net.PacketConn, error) {
+			mu.Lock()
+			packetCalls = append(packetCalls, listenCall{network: network, addr: addr})
+			mu.Unlock()
+			return forwardPacketConn, nil
+		},
+	}
+	runner.listen = func(_, _ string) (net.Listener, error) {
+		return listener, nil
+	}
+	runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
+		return node, nil
+	}
+	runner.serveSocks5 = func(ctx context.Context, _ tsNode, listener net.Listener) error {
+		<-ctx.Done()
+		_ = listener.Close()
+		return ctx.Err()
+	}
+
+	p := profile.NewTailscale("tailnet", 18090)
+	p.TailscaleConfig.PortForwards = []profile.PortForward{
+		{ListenPort: 9001, Protocol: profile.PortForwardTCP, TargetAddr: "127.0.0.1:9101"},
+		{ListenPort: 9002, Protocol: profile.PortForwardUDP, TargetAddr: "127.0.0.1:9102"},
+	}
+
+	err := runner.Start(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runner.Running(p.ID) {
+		t.Fatal("profile should be running after Start")
+	}
+
+	mu.Lock()
+	gotListen := append([]listenCall{}, listenCalls...)
+	gotPacket := append([]listenCall{}, packetCalls...)
+	mu.Unlock()
+
+	if len(gotListen) != 1 || gotListen[0].network != "tcp" || gotListen[0].addr != ":9001" {
+		t.Fatalf("Listen calls = %#v, want one call for tcp :9001", gotListen)
+	}
+	if len(gotPacket) != 1 || gotPacket[0].network != "udp" || gotPacket[0].addr != ":9002" {
+		t.Fatalf("ListenPacket calls = %#v, want one call for udp :9002", gotPacket)
+	}
+
+	err = runner.StopAllAndWait(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPortForwardBindFailureAbortsStart(t *testing.T) {
+	runner := NewRunner()
+	runner.stateDir = t.TempDir()
+	listener := newFakeListener()
+	node := &fakeTSNode{
+		client: &fakeLocalClient{prefs: ipn.NewPrefs(), status: &ipnstate.Status{}},
+		listenFunc: func(_, _ string) (net.Listener, error) {
+			return nil, errForwardListen
+		},
+	}
+	runner.listen = func(_, _ string) (net.Listener, error) {
+		return listener, nil
+	}
+	runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
+		return node, nil
+	}
+	p := profile.NewTailscale("tailnet", 18091)
+	p.TailscaleConfig.PortForwards = []profile.PortForward{
+		{ListenPort: 9003, Protocol: profile.PortForwardTCP, TargetAddr: "127.0.0.1:9103"},
+	}
+
+	err := runner.Start(context.Background(), p)
+	if !errors.Is(err, errForwardListen) {
+		t.Fatalf("expected wrapped forward listen error, got %v", err)
+	}
+	if runner.Running(p.ID) {
+		t.Fatal("profile should not remain running after failed port forward bind")
+	}
+	if !listener.isClosed() {
+		t.Fatal("SOCKS5 listener should be closed after failed port forward bind")
+	}
+	if node.closeCalls != 1 {
+		t.Fatalf("node close calls = %d, want 1", node.closeCalls)
+	}
+}
+
+func TestRelayTCPForwardRoundTripsPayload(t *testing.T) {
+	runner := NewRunner()
+	bg := context.Background()
+	var lc net.ListenConfig
+
+	fwdListener, err := lc.Listen(bg, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fwdListener.Close()
+
+	targetListener, err := lc.Listen(bg, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer targetListener.Close()
+
+	targetAccepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := targetListener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		targetAccepted <- conn
+	}()
+
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	rule := profile.PortForward{
+		ListenPort: 0,
+		Protocol:   profile.PortForwardTCP,
+		TargetAddr: targetListener.Addr().String(),
+	}
+	go runner.relayTCPForward(ctx, nil, fwdListener, rule)
+
+	var dialer net.Dialer
+	clientConn, err := dialer.DialContext(ctx, "tcp", fwdListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientConn.Close()
+	err = clientConn.SetDeadline(time.Now().Add(2 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := []byte("tcp-forward-payload")
+	_, err = clientConn.Write(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var targetConn net.Conn
+	select {
+	case targetConn = <-targetAccepted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("target listener did not receive a connection")
+	}
+	defer targetConn.Close()
+	err = targetConn.SetDeadline(time.Now().Add(2 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, len(payload))
+	_, err = io.ReadFull(targetConn, buf)
+	if err != nil {
+		t.Fatalf("target did not receive relayed payload: %v", err)
+	}
+	if string(buf) != string(payload) {
+		t.Fatalf("target received %q, want %q", buf, payload)
+	}
+
+	reply := []byte("tcp-forward-reply")
+	_, err = targetConn.Write(reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyBuf := make([]byte, len(reply))
+	_, err = io.ReadFull(clientConn, replyBuf)
+	if err != nil {
+		t.Fatalf("client did not receive relayed reply: %v", err)
+	}
+	if string(replyBuf) != string(reply) {
+		t.Fatalf("client received %q, want %q", replyBuf, reply)
+	}
+}
+
+func TestRelayUDPForwardRoundTripsPayload(t *testing.T) {
+	runner := NewRunner()
+	bg := context.Background()
+
+	fwdConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fwdConn.Close()
+
+	targetConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer targetConn.Close()
+
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	rule := profile.PortForward{
+		ListenPort: 0,
+		Protocol:   profile.PortForwardUDP,
+		TargetAddr: targetConn.LocalAddr().String(),
+	}
+	go runner.relayUDPForward(ctx, nil, fwdConn, rule)
+
+	sourceConn, err := net.DialUDP("udp", nil, fwdConn.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sourceConn.Close()
+
+	payload := []byte("udp-forward-payload")
+	_, err = sourceConn.Write(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = targetConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 64)
+	n, relaySrcAddr, err := targetConn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("target did not receive relayed datagram: %v", err)
+	}
+	if string(buf[:n]) != string(payload) {
+		t.Fatalf("target received %q, want %q", buf[:n], payload)
+	}
+
+	reply := []byte("udp-forward-reply")
+	_, err = targetConn.WriteToUDP(reply, relaySrcAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = sourceConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyBuf := make([]byte, 64)
+	rn, err := sourceConn.Read(replyBuf)
+	if err != nil {
+		t.Fatalf("source did not receive relayed reply: %v", err)
+	}
+	if string(replyBuf[:rn]) != string(reply) {
+		t.Fatalf("source received %q, want %q", replyBuf[:rn], reply)
+	}
+}
+
+func TestProcessCloseClosesForwardListeners(t *testing.T) {
+	_, cancel := context.WithCancel(context.Background())
+	proc := newProcess(cancel)
+	recorder := &closeRecorder{}
+
+	if !proc.addForwardCloser(recorder) {
+		t.Fatal("addForwardCloser should succeed on an open process")
+	}
+
+	proc.close()
+
+	if !recorder.closed {
+		t.Fatal("expected process.close() to close the registered forward closer")
+	}
 }
 
 func TestNewTSNetNodeUsesProfileConfiguration(t *testing.T) {
@@ -1153,3 +1438,46 @@ func waitForRunnerLog(t *testing.T, events <-chan Event, message string) {
 		}
 	}
 }
+
+// closeRecorder is a minimal io.Closer test helper that records whether
+// Close was called, following the existing fakeListener helper style.
+type closeRecorder struct {
+	closed bool
+}
+
+func (c *closeRecorder) Close() error {
+	c.closed = true
+	return nil
+}
+
+// fakePacketConn is a minimal net.PacketConn test double used as a stand-in
+// for a bound tsNode.ListenPacket result in tests that only need to verify
+// bind/close plumbing, not actual datagram relaying.
+type fakePacketConn struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *fakePacketConn) ReadFrom(_ []byte) (int, net.Addr, error) {
+	<-c.closed
+	return 0, nil, net.ErrClosed
+}
+
+func (c *fakePacketConn) WriteTo(_ []byte, _ net.Addr) (int, error) {
+	return 0, net.ErrClosed
+}
+
+func (c *fakePacketConn) Close() error {
+	c.once.Do(func() {
+		close(c.closed)
+	})
+	return nil
+}
+
+func (c *fakePacketConn) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}
+}
+
+func (c *fakePacketConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *fakePacketConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *fakePacketConn) SetWriteDeadline(_ time.Time) error { return nil }

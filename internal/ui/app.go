@@ -397,7 +397,8 @@ func (g *GUI) setupTailscaleForm() {
 	g.tsPortForwardTarget = widget.NewEntry()
 	g.tsPortForwardTarget.SetPlaceHolder(tr("Target address, e.g. 192.168.1.10:80"))
 	g.tsPortForwardAdd = widget.NewButtonWithIcon(tr("Add"), theme.ContentAddIcon(), func() {
-		if err := g.addPortForwardFromInputs(); err != nil {
+		err := g.addPortForwardFromInputs()
+		if err != nil {
 			g.showError("Add port forward", err)
 		}
 	})
