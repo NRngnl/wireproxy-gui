@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +29,8 @@ var (
 	errUnexpectedListen       = errors.New("unexpected listen")
 	errUnexpectedListenPacket = errors.New("unexpected listen packet")
 	errForwardListen          = errors.New("forward listen failed")
+	errTestTCPAcceptFailed    = errors.New("boom: accept failed")
+	errTestUDPReadFromFailed  = errors.New("boom: read from failed")
 )
 
 func TestStartRejectsWireGuardProfile(t *testing.T) {
@@ -238,7 +241,11 @@ func TestStartPortForwardsBindsEachConfiguredRule(t *testing.T) {
 
 	forwardListener := newFakeListener()
 	forwardPacketConn := &fakePacketConn{closed: make(chan struct{})}
+	nodeStatus := &ipnstate.Status{
+		TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.5")},
+	}
 	node := &fakeTSNode{
+		status: nodeStatus,
 		client: &fakeLocalClient{prefs: ipn.NewPrefs(), status: &ipnstate.Status{}},
 		listenFunc: func(network, addr string) (net.Listener, error) {
 			mu.Lock()
@@ -287,8 +294,23 @@ func TestStartPortForwardsBindsEachConfiguredRule(t *testing.T) {
 	if len(gotListen) != 1 || gotListen[0].network != "tcp" || gotListen[0].addr != ":9001" {
 		t.Fatalf("Listen calls = %#v, want one call for tcp :9001", gotListen)
 	}
-	if len(gotPacket) != 1 || gotPacket[0].network != "udp" || gotPacket[0].addr != ":9002" {
-		t.Fatalf("ListenPacket calls = %#v, want one call for udp :9002", gotPacket)
+	// Regression test for the bug where UDP port forwards used a bare
+	// ":port" address: tsnet.Server.ListenPacket's documented contract
+	// requires addr to be of the form "ip:port" with a valid IP (unlike
+	// tsnet.Server.Listen, which explicitly documents that a bare ":port"
+	// matches the node's own local IP for TCP). A bare ":9002" would fail
+	// at runtime against the real tsnet.Server.ListenPacket with "address
+	// must be a valid IP", even though the fake test double here doesn't
+	// replicate that validation.
+	if len(gotPacket) != 1 || gotPacket[0].network != "udp" {
+		t.Fatalf("ListenPacket calls = %#v, want one call for udp", gotPacket)
+	}
+	wantPacketAddr := "100.64.0.5:9002"
+	if gotPacket[0].addr != wantPacketAddr {
+		t.Fatalf("ListenPacket addr = %q, want %q (not a bare \":port\")", gotPacket[0].addr, wantPacketAddr)
+	}
+	if strings.HasPrefix(gotPacket[0].addr, ":") {
+		t.Fatalf("ListenPacket addr = %q, must not be a bare \":port\" form", gotPacket[0].addr)
 	}
 
 	err = runner.StopAllAndWait(context.Background())
@@ -366,7 +388,7 @@ func TestRelayTCPForwardRoundTripsPayload(t *testing.T) {
 		Protocol:   profile.PortForwardTCP,
 		TargetAddr: targetListener.Addr().String(),
 	}
-	go runner.relayTCPForward(ctx, nil, fwdListener, rule)
+	go runner.relayTCPForward(ctx, nil, fwdListener, rule, "profile-tcp-roundtrip", "TCP Roundtrip Profile")
 
 	var dialer net.Dialer
 	clientConn, err := dialer.DialContext(ctx, "tcp", fwdListener.Addr().String())
@@ -444,7 +466,7 @@ func TestRelayUDPForwardRoundTripsPayload(t *testing.T) {
 		Protocol:   profile.PortForwardUDP,
 		TargetAddr: targetConn.LocalAddr().String(),
 	}
-	go runner.relayUDPForward(ctx, nil, fwdConn, rule)
+	go runner.relayUDPForward(ctx, nil, fwdConn, rule, "profile-udp-roundtrip", "UDP Roundtrip Profile")
 
 	sourceConn, err := net.DialUDP("udp", nil, fwdConn.LocalAddr().(*net.UDPAddr))
 	if err != nil {
@@ -488,6 +510,82 @@ func TestRelayUDPForwardRoundTripsPayload(t *testing.T) {
 	}
 	if string(replyBuf[:rn]) != string(reply) {
 		t.Fatalf("source received %q, want %q", replyBuf[:rn], reply)
+	}
+}
+
+// TestRelayTCPForwardOperationalErrorIncludesProfileID is a regression test
+// for the bug where relayTCPForward's/relayUDPForward's operational error
+// events left ProfileID/ProfileName empty, causing
+// Service.handleRuntimeEvent to silently drop every port-forward
+// operational error event (it discards any event whose ProfileID does not
+// match a known profile). It forces a real
+// (non-net.ErrClosed) Accept() failure and asserts the emitted EventError
+// carries the profile identity threaded through startPortForwards.
+func TestRelayTCPForwardOperationalErrorIncludesProfileID(t *testing.T) {
+	runner := NewRunner()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	fwdListener := &erroringListener{err: errTestTCPAcceptFailed}
+	rule := profile.PortForward{
+		ListenPort: 9005,
+		Protocol:   profile.PortForwardTCP,
+		TargetAddr: "127.0.0.1:9105",
+	}
+	const profileID = "profile-tcp-operational-error"
+	const profileName = "TCP Operational Error Profile"
+
+	go runner.relayTCPForward(ctx, nil, fwdListener, rule, profileID, profileName)
+
+	select {
+	case event := <-runner.Events():
+		if event.Type != EventError {
+			t.Fatalf("event type = %v, want EventError", event.Type)
+		}
+		if event.ProfileID != profileID {
+			t.Fatalf("event.ProfileID = %q, want %q", event.ProfileID, profileID)
+		}
+		if event.ProfileName != profileName {
+			t.Fatalf("event.ProfileName = %q, want %q", event.ProfileName, profileName)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for forward error event")
+	}
+}
+
+// TestRelayUDPForwardOperationalErrorIncludesProfileID forces a real
+// (non-net.ErrClosed) ReadFrom() failure and asserts the emitted
+// EventError carries the profile identity threaded through
+// startPortForwards.
+func TestRelayUDPForwardOperationalErrorIncludesProfileID(t *testing.T) {
+	runner := NewRunner()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	fwdConn := &erroringPacketConn{err: errTestUDPReadFromFailed}
+	rule := profile.PortForward{
+		ListenPort: 9006,
+		Protocol:   profile.PortForwardUDP,
+		TargetAddr: "127.0.0.1:9106",
+	}
+	const profileID = "profile-udp-operational-error"
+	const profileName = "UDP Operational Error Profile"
+
+	go runner.relayUDPForward(ctx, nil, fwdConn, rule, profileID, profileName)
+
+	select {
+	case event := <-runner.Events():
+		if event.Type != EventError {
+			t.Fatalf("event type = %v, want EventError", event.Type)
+		}
+		if event.ProfileID != profileID {
+			t.Fatalf("event.ProfileID = %q, want %q", event.ProfileID, profileID)
+		}
+		if event.ProfileName != profileName {
+			t.Fatalf("event.ProfileName = %q, want %q", event.ProfileName, profileName)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for forward error event")
 	}
 }
 
@@ -1366,6 +1464,37 @@ func (l *fakeListener) isClosed() bool {
 		return false
 	}
 }
+
+// erroringListener is a minimal net.Listener test double whose Accept
+// always returns a fixed, non-net.ErrClosed error, used to force
+// relayTCPForward's operational error path (as opposed to its
+// clean-shutdown path for net.ErrClosed/context cancellation).
+type erroringListener struct {
+	err error
+}
+
+func (l *erroringListener) Accept() (net.Conn, error) { return nil, l.err }
+func (l *erroringListener) Close() error              { return nil }
+func (l *erroringListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}
+}
+
+// erroringPacketConn is a minimal net.PacketConn test double whose ReadFrom
+// always returns a fixed, non-net.ErrClosed error, used to force
+// relayUDPForward's operational error path.
+type erroringPacketConn struct {
+	err error
+}
+
+func (c *erroringPacketConn) ReadFrom(_ []byte) (int, net.Addr, error)  { return 0, nil, c.err }
+func (c *erroringPacketConn) WriteTo(_ []byte, _ net.Addr) (int, error) { return 0, nil }
+func (c *erroringPacketConn) Close() error                              { return nil }
+func (c *erroringPacketConn) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}
+}
+func (c *erroringPacketConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *erroringPacketConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *erroringPacketConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 type pipeListener struct {
 	conns  chan net.Conn

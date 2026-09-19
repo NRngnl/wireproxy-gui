@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,7 @@ var (
 	ErrNotRunning       = connection.ErrNotRunning
 	ErrInvalidProfileID = connection.ErrInvalidProfileID
 	errCloseNode        = errors.New("close embedded Tailscale node")
+	errNoTailscaleIP    = errors.New("no Tailscale IP available for this node")
 )
 
 type Event = connection.Event
@@ -334,7 +337,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 		return context.Canceled
 	}
 
-	err = r.startPortForwards(procCtx, p, runningNode, proc)
+	err = r.startPortForwards(procCtx, p, runningNode, proc, status)
 	if err != nil {
 		return err
 	}
@@ -784,11 +787,19 @@ func (r *Runner) runSocks5(_ context.Context, node tsNode, listener net.Listener
 // goroutine. It does not block waiting for the relay loops. Any bind
 // failure aborts immediately and returns the error so Start() can fail the
 // whole profile start.
-func (r *Runner) startPortForwards(ctx context.Context, p profile.Profile, node tsNode, proc *process) error {
+func (r *Runner) startPortForwards(ctx context.Context, p profile.Profile, node tsNode, proc *process, status *ipnstate.Status) error {
 	for _, rule := range p.TailscaleConfig.PortForwards {
-		addr := fmt.Sprintf(":%d", rule.ListenPort)
 		switch rule.Protocol {
 		case profile.PortForwardUDP:
+			// tsnet.Server.ListenPacket requires addr to be of the form
+			// "ip:port" with a valid IP (unlike tsnet.Server.Listen, which
+			// documents that a bare ":port" matches the node's own local IP).
+			// Build the UDP listen address from the node's own tailnet IP.
+			selfIP, err := selfTailscaleIP(status)
+			if err != nil {
+				return fmt.Errorf("determine local Tailscale IP for UDP port forward: %w", err)
+			}
+			addr := net.JoinHostPort(selfIP.String(), strconv.Itoa(rule.ListenPort))
 			packetConn, err := node.ListenPacket("udp", addr)
 			if err != nil {
 				return fmt.Errorf("listen UDP port forward on %s: %w", addr, err)
@@ -796,8 +807,9 @@ func (r *Runner) startPortForwards(ctx context.Context, p profile.Profile, node 
 			if !proc.addForwardCloser(packetConn) {
 				return context.Canceled
 			}
-			go r.relayUDPForward(ctx, node, packetConn, rule)
+			go r.relayUDPForward(ctx, node, packetConn, rule, p.ID, p.Name)
 		default:
+			addr := fmt.Sprintf(":%d", rule.ListenPort)
 			listener, err := node.Listen("tcp", addr)
 			if err != nil {
 				return fmt.Errorf("listen TCP port forward on %s: %w", addr, err)
@@ -805,10 +817,26 @@ func (r *Runner) startPortForwards(ctx context.Context, p profile.Profile, node 
 			if !proc.addForwardCloser(listener) {
 				return context.Canceled
 			}
-			go r.relayTCPForward(ctx, node, listener, rule)
+			go r.relayTCPForward(ctx, node, listener, rule, p.ID, p.Name)
 		}
 	}
 	return nil
+}
+
+// selfTailscaleIP returns the node's own first IPv4 Tailscale address from
+// status, falling back to the first address of any family if no IPv4
+// address is present. It errors if status has no TailscaleIPs at all, which
+// would otherwise force ListenPacket into an invalid bare-port address.
+func selfTailscaleIP(status *ipnstate.Status) (netip.Addr, error) {
+	if status == nil || len(status.TailscaleIPs) == 0 {
+		return netip.Addr{}, errNoTailscaleIP
+	}
+	for _, ip := range status.TailscaleIPs {
+		if ip.Is4() {
+			return ip, nil
+		}
+	}
+	return status.TailscaleIPs[0], nil
 }
 
 // relayTCPForward accepts connections on listener and relays each one to
@@ -818,14 +846,14 @@ func (r *Runner) startPortForwards(ctx context.Context, p profile.Profile, node 
 // r.removeProcess; only the SOCKS5 goroutine owns overall process teardown.
 // It emits EventError for operational failures that are not due to context
 // cancellation or a closed listener.
-func (r *Runner) relayTCPForward(ctx context.Context, _ tsNode, listener net.Listener, rule profile.PortForward) {
+func (r *Runner) relayTCPForward(ctx context.Context, _ tsNode, listener net.Listener, rule profile.PortForward, profileID, profileName string) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
 			}
-			r.emitForwardError(rule, err)
+			r.emitForwardError(rule, err, profileID, profileName)
 			return
 		}
 		go relayTCPConn(ctx, conn, rule.TargetAddr)
@@ -875,7 +903,7 @@ func relayTCPConn(ctx context.Context, conn net.Conn, targetAddr string) {
 // dial to rule.TargetAddr (plain net.Dial, not node.Dial) whose replies are
 // written back out through packetConn.WriteTo. All session goroutines exit
 // when ctx is canceled.
-func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.PacketConn, rule profile.PortForward) {
+func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.PacketConn, rule profile.PortForward, profileID, profileName string) {
 	go func() {
 		<-ctx.Done()
 		_ = packetConn.Close()
@@ -895,7 +923,7 @@ func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.P
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
 			}
-			r.emitForwardError(rule, err)
+			r.emitForwardError(rule, err, profileID, profileName)
 			return
 		}
 		payload := make([]byte, n)
@@ -945,16 +973,18 @@ func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.P
 	}
 }
 
-// emitForwardError emits an EventError for a port-forward loop failure.
-// It has no profile.Profile to attach (relayTCPForward/relayUDPForward
-// intentionally do not take one per the implementation plan), so it sends
-// the event directly rather than via Runner.emit.
-func (r *Runner) emitForwardError(rule profile.PortForward, err error) {
+// emitForwardError emits an EventError for a port-forward loop failure,
+// tagged with the owning profile's ID and name so consumers such as
+// Service.handleRuntimeEvent (which discards events for unknown profile
+// IDs) can route and display it.
+func (r *Runner) emitForwardError(rule profile.PortForward, err error, profileID, profileName string) {
 	message := fmt.Sprintf("port forward %s/%d: %v", rule.Protocol, rule.ListenPort, err)
 	event := Event{
-		Type:    EventError,
-		Message: message,
-		At:      time.Now(),
+		Type:        EventError,
+		ProfileID:   profileID,
+		ProfileName: profileName,
+		Message:     message,
+		At:          time.Now(),
 	}
 	select {
 	case r.events <- event:
