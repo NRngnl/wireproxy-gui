@@ -22,6 +22,7 @@ import (
 	"github.com/NRngnl/wireproxy-gui/internal/application"
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
+	"github.com/NRngnl/wireproxy-gui/internal/svcinstall"
 )
 
 const sampleWireGuardConfig = `[Interface]
@@ -596,6 +597,105 @@ func TestTrayMenuShowsTailscaleProfileDetail(t *testing.T) {
 	requireChildLabel(t, requireMenuItem(t, gui.trayMenu(), "tailnet"), "Tailscale node: proxy-node")
 }
 
+func TestServiceInstallMenuItemUnsupportedIsDisabled(t *testing.T) {
+	gui, _ := newProfilesTestGUI(t)
+	gui.svc = &fakeInstaller{supported: false}
+	item := gui.serviceInstallMenuItem()
+	if !item.Disabled {
+		t.Fatalf("expected menu item to be disabled when Supported() is false")
+	}
+}
+
+func TestServiceInstallMenuItemShowsEnableWhenNotInstalled(t *testing.T) {
+	gui, _ := newProfilesTestGUI(t)
+	gui.svc = &fakeInstaller{supported: true, status: svcinstall.Status{Installed: false}}
+	item := gui.serviceInstallMenuItem()
+	if item.Disabled {
+		t.Fatalf("expected menu item to be enabled")
+	}
+	if item.Label != tr("Enable Start on Login") {
+		t.Fatalf("item.Label = %q, want %q", item.Label, tr("Enable Start on Login"))
+	}
+}
+
+func TestServiceInstallMenuItemShowsDisableWhenInstalled(t *testing.T) {
+	gui, _ := newProfilesTestGUI(t)
+	gui.svc = &fakeInstaller{supported: true, status: svcinstall.Status{Installed: true}}
+	item := gui.serviceInstallMenuItem()
+	if item.Label != tr("Disable Start on Login") {
+		t.Fatalf("item.Label = %q, want %q", item.Label, tr("Disable Start on Login"))
+	}
+}
+
+// waitForRunOnUI temporarily overrides the package-level runOnUI variable
+// with a wrapper that signals a channel after the wrapped function runs,
+// then restores the original via t.Cleanup. Tests that trigger a
+// background goroutine ending in a runOnUI(...) callback (as
+// installService/uninstallService do) use this instead of polling GUI
+// struct fields directly from the test goroutine, which would be a data
+// race under -race: the background goroutine and the test goroutine
+// would otherwise touch the same fields with no synchronization between
+// them.
+func waitForRunOnUI(t *testing.T) <-chan struct{} {
+	t.Helper()
+	original := runOnUI
+	done := make(chan struct{}, 1)
+	runOnUI = func(fn func()) {
+		original(fn)
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	}
+	t.Cleanup(func() { runOnUI = original })
+	return done
+}
+
+func TestEnableStartOnLoginCallsInstall(t *testing.T) {
+	gui, _ := newProfilesTestGUI(t)
+	fake := &fakeInstaller{supported: true}
+	gui.svc = fake
+	gui.window = fynetest.NewWindow(nil)
+	gui.ctx = context.Background()
+	done := waitForRunOnUI(t)
+
+	gui.enableStartOnLogin()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Install did not complete within the deadline")
+	}
+
+	if install, _ := fake.calls(); install != 1 {
+		t.Fatalf("expected exactly one Install call, got %d", install)
+	}
+}
+
+func TestDisableStartOnLoginCallsUninstallAfterConfirm(t *testing.T) {
+	gui, _ := newProfilesTestGUI(t)
+	fake := &fakeInstaller{supported: true}
+	gui.svc = fake
+	gui.window = fynetest.NewWindow(nil)
+	gui.ctx = context.Background()
+	done := waitForRunOnUI(t)
+
+	// uninstallService is the confirmed-path callee; exercise it
+	// directly, since dialog.ShowConfirm's own click plumbing is Fyne UI
+	// glue already covered indirectly elsewhere in this file.
+	gui.uninstallService()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Uninstall did not complete within the deadline")
+	}
+
+	if _, uninstall := fake.calls(); uninstall != 1 {
+		t.Fatalf("expected exactly one Uninstall call, got %d", uninstall)
+	}
+}
+
 func TestProfileLogTextFormatsAndLocalizesEntries(t *testing.T) {
 	at := time.Date(2025, 1, 1, 12, 34, 56, 0, time.UTC)
 	withTranslator(t, func(message string, _ ...any) string {
@@ -815,6 +915,51 @@ func newProfilesTestGUI(t *testing.T, profiles ...profile.Profile) (*GUI, *fakeA
 	gui.exportButton = widget.NewButtonWithIcon("Export", theme.UploadIcon(), nil)
 	gui.showSelected()
 	return gui, core
+}
+
+// fakeInstaller is a test double for svcinstall.Installer.
+type fakeInstaller struct {
+	mu sync.Mutex
+
+	supported bool
+	status    svcinstall.Status
+	statusErr error
+
+	installErr      error
+	installCalls    int
+	lastInstallOpts svcinstall.Options
+
+	uninstallErr   error
+	uninstallCalls int
+}
+
+func (f *fakeInstaller) Supported() bool { return f.supported }
+
+func (f *fakeInstaller) Status(context.Context) (svcinstall.Status, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.status, f.statusErr
+}
+
+func (f *fakeInstaller) Install(_ context.Context, opts svcinstall.Options) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.installCalls++
+	f.lastInstallOpts = opts
+	return f.installErr
+}
+
+func (f *fakeInstaller) Uninstall(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.uninstallCalls++
+	return f.uninstallErr
+}
+
+func (f *fakeInstaller) calls() (install, uninstall int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.installCalls, f.uninstallCalls
 }
 
 type fakeProfileFileDialog struct {

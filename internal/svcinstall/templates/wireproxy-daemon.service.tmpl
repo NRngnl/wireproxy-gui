@@ -1,0 +1,23 @@
+[Unit]
+Description=wireproxy-gui headless daemon (profile manager)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={{.DaemonBinaryPath}} --store "{{.StorePath}}"
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=15
+# Run as a per-user unit (systemctl --user) by default so it shares
+# $XDG_CONFIG_HOME/wireproxy-gui/profiles.json with the desktop GUI for the
+# same user. For unattended/server hosts needing root-level tun access,
+# install as a system unit instead with an explicit --store path; document
+# both in docs/daemon.md. Verify actual tun/capability requirements
+# empirically before finalizing (Task 9).
+# User=wireproxy-gui
+# AmbientCapabilities=CAP_NET_ADMIN
+
+[Install]
+WantedBy=default.target

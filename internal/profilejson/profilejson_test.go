@@ -278,6 +278,70 @@ func TestCodecDecodeImportErrors(t *testing.T) {
 	}
 }
 
+// TestRepositorySaveIsAtomicOnWriteFailure simulates a mid-write failure by
+// revoking write permission on the store directory before calling Save.
+// Save's temp-file-in-same-dir + os.Rename pattern means CreateTemp fails
+// before any bytes of the on-disk store file are touched, so the original
+// store file must remain byte-identical to its pre-Save content and no
+// stray temp file must be left behind.
+func TestRepositorySaveIsAtomicOnWriteFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("skipping permission-based atomicity test when running as root")
+	}
+
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, storeFileName)
+	repository := NewRepository(storePath)
+
+	sentinelProfiles := []profile.Profile{profile.New("sentinel", sampleWG, 1080)}
+	if err := repository.Save(sentinelProfiles); err != nil {
+		t.Fatal(err)
+	}
+
+	original, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Revoke write permission on the directory so os.CreateTemp fails
+	// before any temp file (and therefore no rename) can happen.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(dir, 0o700)
+	})
+
+	failingProfiles := []profile.Profile{profile.New("clobber", sampleWG, 1081)}
+	err = repository.Save(failingProfiles)
+	if err == nil {
+		t.Fatal("expected Save to fail while the store directory is read-only")
+	}
+
+	// Restore permissions before inspecting the directory contents.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(original, after) {
+		t.Fatalf("store file was modified by a failed Save: original=%q after=%q", original, after)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".tmp") {
+			t.Fatalf("leftover temp file after failed Save: %s", entry.Name())
+		}
+	}
+}
+
 func TestBundleEncodingUsesVersionOne(t *testing.T) {
 	data, err := EncodeBundle([]profile.Profile{profile.New("demo", sampleWG, 1080)})
 	if err != nil {

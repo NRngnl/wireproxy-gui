@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"github.com/NRngnl/wireproxy-gui/internal/buildinfo"
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
+	"github.com/NRngnl/wireproxy-gui/internal/svcinstall"
 )
 
 const (
@@ -71,11 +73,13 @@ type GUI struct {
 	cancel context.CancelFunc
 	files  profileFileDialog
 	tray   desktop.App
+	svc    svcinstall.Installer
 
-	selectedID       string
-	logTails         map[string]bool
-	logOffsets       map[string]fyne.Position
-	exitNodesLoading bool
+	selectedID        string
+	logTails          map[string]bool
+	logOffsets        map[string]fyne.Position
+	exitNodesLoading  bool
+	svcActionInFlight bool
 
 	list                *widget.List
 	sidebarSummaryLabel *widget.Label
@@ -169,6 +173,7 @@ func Run(core Application, loadErr error) {
 		ctx:    ctx,
 		cancel: cancel,
 		files:  nativeProfileFileDialog{},
+		svc:    svcinstall.New(),
 	}
 	profiles := core.Profiles()
 	if len(profiles) > 0 {
@@ -933,10 +938,142 @@ func (g *GUI) trayMenu() *fyne.Menu {
 			runOnUI(g.disconnectAll)
 		}),
 		fyne.NewMenuItemSeparator(),
+		g.serviceInstallMenuItem(),
+		fyne.NewMenuItemSeparator(),
 		g.trayQuitMenuItem(),
 	)
 
 	return fyne.NewMenu(tr("Wireproxy GUI"), items...)
+}
+
+// serviceInstallMenuItem returns the tray menu item that toggles the
+// per-user login-time wireproxy-daemon service (see internal/svcinstall).
+// It never targets a system-wide service and never requires elevation.
+func (g *GUI) serviceInstallMenuItem() *fyne.MenuItem {
+	if g.svc == nil || !g.svc.Supported() {
+		return disabledMenuItem(tr("Start on Login (not yet supported on this OS)"))
+	}
+
+	ctx := g.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	statusCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	status, err := g.svc.Status(statusCtx)
+
+	if g.svcActionInFlight {
+		item := disabledMenuItem(tr("Start on Login (updating…)"))
+		return item
+	}
+
+	if err != nil || !status.Installed {
+		item := fyne.NewMenuItem(tr("Enable Start on Login"), func() {
+			runOnUI(g.enableStartOnLogin)
+		})
+		return item
+	}
+
+	item := fyne.NewMenuItem(tr("Disable Start on Login"), func() {
+		runOnUI(g.disableStartOnLogin)
+	})
+	return item
+}
+
+// enableStartOnLogin installs (or re-installs) the per-user daemon
+// service. It does not prompt for confirmation: the action is low-risk
+// and reversible, matching the existing Connect All precedent.
+func (g *GUI) enableStartOnLogin() {
+	g.installService(svcinstall.Options{})
+}
+
+// installService runs svcinstall.Install asynchronously so the tray
+// menu/event loop is never blocked on a subprocess call, then reports
+// the result via the same dialog.ShowInformation/showError pattern used
+// elsewhere in this file.
+func (g *GUI) installService(opts svcinstall.Options) {
+	if g.svc == nil || g.svcActionInFlight {
+		return
+	}
+	g.svcActionInFlight = true
+	g.refreshTrayMenu()
+	ctx := g.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go func() {
+		err := g.svc.Install(ctx, opts)
+		runOnUI(func() {
+			g.svcActionInFlight = false
+			g.refreshTrayMenu()
+			if err != nil {
+				if errors.Is(err, svcinstall.ErrLockHeld) && !opts.Force {
+					g.confirmForceInstallService(err)
+					return
+				}
+				g.showError("Enable start on login", err)
+				return
+			}
+			dialog.ShowInformation(tr("Start on Login"), tr("wireproxy-daemon is now installed as a per-user login service."), g.window)
+		})
+	}()
+}
+
+// confirmForceInstallService offers a "proceed anyway" retry when Install
+// returned ErrLockHeld, per internal/svcinstall's advisory (non-blocking)
+// lock-check philosophy.
+func (g *GUI) confirmForceInstallService(lockErr error) {
+	dialog.ShowConfirm(
+		tr("Start on Login"),
+		tr("{{.Error}}\n\nInstall anyway?", map[string]any{"Error": localizedErrorText(lockErr)}),
+		func(proceed bool) {
+			if proceed {
+				g.installService(svcinstall.Options{Force: true})
+			}
+		},
+		g.window,
+	)
+}
+
+// disableStartOnLogin confirms before uninstalling, since it stops a
+// background service the user may depend on for unattended operation —
+// mirroring the existing "Quit while connected" confirmation precedent.
+func (g *GUI) disableStartOnLogin() {
+	dialog.ShowConfirm(
+		tr("Start on Login"),
+		tr("Disable and remove the per-user login service for wireproxy-daemon?"),
+		func(proceed bool) {
+			if !proceed {
+				return
+			}
+			g.uninstallService()
+		},
+		g.window,
+	)
+}
+
+func (g *GUI) uninstallService() {
+	if g.svc == nil || g.svcActionInFlight {
+		return
+	}
+	g.svcActionInFlight = true
+	g.refreshTrayMenu()
+	ctx := g.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go func() {
+		err := g.svc.Uninstall(ctx)
+		runOnUI(func() {
+			g.svcActionInFlight = false
+			g.refreshTrayMenu()
+			if err != nil {
+				g.showError("Disable start on login", err)
+				return
+			}
+			dialog.ShowInformation(tr("Start on Login"), tr("The per-user login service has been removed."), g.window)
+		})
+	}()
 }
 
 func (g *GUI) profileTrayMenuItem(p profile.Profile) *fyne.MenuItem {

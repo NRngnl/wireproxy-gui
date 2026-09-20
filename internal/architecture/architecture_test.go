@@ -21,11 +21,15 @@ func TestInternalDependenciesPointInward(t *testing.T) {
 		"application": {"connection", "profile"},
 		"buildinfo":   {},
 		"connection":  {},
+		"daemon":      {"application", "buildinfo", "connection", "profile"},
+		"lock":        {},
 		"profile":     {},
 		"profilejson": {"application", "profile"},
 		"runner":      {"connection", "profile"},
+		"svcinstall":  {"lock", "profilejson", "profile"},
 		"tailscale":   {"connection", "profile"},
-		"ui":          {"application", "buildinfo", "connection", "profile"},
+		"tui":         {"application", "buildinfo", "connection", "profile", "tui/screens", "svcinstall"},
+		"ui":          {"application", "buildinfo", "connection", "profile", "svcinstall"},
 		"wireproxy":   {"connection", "profile"},
 	}
 

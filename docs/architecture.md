@@ -36,9 +36,27 @@ cmd/wireproxy-gui is the composition root that supplies every adapter.
   localization, dialogs, tray presentation, and form-to-domain mapping. It
   invokes application use cases and never constructs or imports persistence or
   runtime adapters.
-- `cmd/wireproxy-gui` is the only composition root. It chooses concrete
-  adapters, loads application state, and passes the application boundary to the
-  UI.
+- `internal/tui` (with `internal/tui/screens`) is a second inbound adapter,
+  a Bubble Tea terminal UI with the same boundary rules as `internal/ui`: it
+  depends inward on `application`/domain types and never constructs
+  persistence or runtime adapters.
+- `internal/daemon` is a third, headless inbound adapter (no UI at all) used
+  by `cmd/wireproxy-daemon` for unattended/server operation, under the same
+  boundary rules as `ui`/`tui`.
+- `internal/svcinstall` is a leaf infrastructure package (no dependency on
+  `application`, `ui`, `tui`, or `daemon`; only `lock`, `profilejson`, and
+  `profile`) that installs/uninstalls `wireproxy-daemon` as a **per-user**
+  login-time OS service (systemd `--user` on Linux, a launchd LaunchAgent on
+  macOS). Both `ui` and `tui` import it directly — it is closer in shape to
+  `internal/lock` (an infrastructure leaf with an OS-level side effect) than
+  to a runtime adapter like `wireproxy`/`tailscale`, since it has no
+  relationship to `application.Service`'s connection/profile use cases. See
+  `docs/svcinstall-action-plan.md` §2.1 for the full boundary-decision
+  rationale.
+- `cmd/wireproxy-gui`, `cmd/wireproxy-tui`, and `cmd/wireproxy-daemon` are
+  composition roots. Each chooses concrete adapters, loads application
+  state, and passes the application boundary to its own inbound adapter
+  (`ui`, `tui`, or `daemon` respectively).
 
 ## Boundary rules
 
