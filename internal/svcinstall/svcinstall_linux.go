@@ -170,7 +170,8 @@ func (linuxInstaller) Install(ctx context.Context, opts Options) error {
 	}
 
 	path := filepath.Join(dir, unitFileName)
-	if err := os.WriteFile(path, rendered, 0o644); err != nil {
+	err = os.WriteFile(path, rendered, 0o600)
+	if err != nil {
 		return fmt.Errorf("svcinstall: writing unit file %q: %w", path, err)
 	}
 

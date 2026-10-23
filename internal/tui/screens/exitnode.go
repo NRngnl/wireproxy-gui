@@ -155,7 +155,7 @@ type ExitNodesErrMsg struct {
 // profileID) and reports the result as an ExitNodesLoadedMsg or
 // ExitNodesErrMsg. The caller (model.go) owns dispatching this command and
 // handling the resulting messages.
-func LoadExitNodesCmd(app exitNodeSource, ctx context.Context, profileID string) tea.Cmd {
+func LoadExitNodesCmd(ctx context.Context, app exitNodeSource, profileID string) tea.Cmd {
 	return func() tea.Msg {
 		nodes, err := app.ExitNodes(ctx, profileID)
 		if err != nil {

@@ -38,33 +38,33 @@ func main() {
 			fmt.Fprintf(os.Stderr, "wireproxy-daemon: failed to open log file %q: %v\n", *logFile, err)
 			os.Exit(1)
 		}
-		defer f.Close()
 		logger := daemon.NewLogger(f, *jsonLogs)
-		runDaemon(*storePath, logger)
-		return
+		code := runDaemon(*storePath, logger)
+		_ = f.Close()
+		os.Exit(code)
 	}
 
 	logger := daemon.NewLogger(logWriter, *jsonLogs)
-	runDaemon(*storePath, logger)
+	os.Exit(runDaemon(*storePath, logger))
 }
 
-func runDaemon(storePath string, logger *slog.Logger) {
+func runDaemon(storePath string, logger *slog.Logger) int {
 	err := os.MkdirAll(filepath.Dir(storePath), 0o700)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wireproxy-daemon: failed to create profile store directory for %q: %v\n", storePath, err)
-		os.Exit(1)
+		return 1
 	}
 
 	lockHandle, held, err := lock.TryLock(storePath + ".lock")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wireproxy-daemon: failed to acquire lock for %q: %v\n", storePath, err)
-		os.Exit(1)
+		return 1
 	}
 	if !held {
 		fmt.Fprintf(os.Stderr, "wireproxy-daemon: another daemon instance already holds the lock for %s — only one daemon may run per profile store\n", storePath)
-		os.Exit(1)
+		return 1
 	}
-	defer lockHandle.Release()
+	defer func() { _ = lockHandle.Release() }()
 
 	runtime := runner.New(wireproxy.NewRunner(), tailscale.NewRunner())
 	core := application.New(profilejson.NewRepository(storePath), profilejson.Codec{}, runtime)
@@ -78,6 +78,7 @@ func runDaemon(storePath string, logger *slog.Logger) {
 	err = daemon.Run(ctx, core, loadErr, logger, daemon.Options{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wireproxy-daemon: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

@@ -15,9 +15,6 @@ const (
 // Lipgloss picks up NO_COLOR and terminal capability detection natively via
 // termenv; styles here intentionally avoid forcing a color profile.
 var (
-	appStyle = lipgloss.NewStyle().
-			Padding(0, 1)
-
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Padding(0, 1)
@@ -26,9 +23,6 @@ var (
 			Border(lipgloss.RoundedBorder())
 
 	sidebarStyle = borderStyle
-
-	statusBarStyle = lipgloss.NewStyle().
-			Padding(0, 1)
 
 	errorBannerStyle = lipgloss.NewStyle().
 				Bold(true).
@@ -52,9 +46,9 @@ var (
 
 // Detail pane and log viewport styles added for Task 4.
 var (
-	detailStyle = borderStyle.Copy()
+	detailStyle = borderStyle
 
-	logViewportStyle = borderStyle.Copy()
+	logViewportStyle = borderStyle
 
 	detailLabelStyle = lipgloss.NewStyle().
 				Bold(true)

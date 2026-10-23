@@ -62,7 +62,7 @@ func (f *fakeRunner) install(t *testing.T) {
 // systemctl's boolean-query subcommands report their answer.
 func exitError(t *testing.T, code int) error {
 	t.Helper()
-	cmd := exec.Command("sh", "-c", "exit "+itoa(code))
+	cmd := exec.CommandContext(context.Background(), "sh", "-c", "exit "+itoa(code))
 	err := cmd.Run()
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
@@ -261,7 +261,7 @@ func TestStatusMapsDisabledInactive(t *testing.T) {
 func TestStatusSystemctlNotFoundIsError(t *testing.T) {
 	home := setHome(t)
 	fr := newFakeRunner()
-	fr.defaultErr = errors.New("exec: \"systemctl\": executable file not found in $PATH")
+	fr.defaultErr = errSystemctlMissing
 	fr.install(t)
 
 	dir := filepath.Join(home, ".config", "systemd", "user")
@@ -313,3 +313,5 @@ func TestInstallReturnsErrLockHeldWithoutInvokingSystemctl(t *testing.T) {
 		t.Fatalf("expected 0 systemctl calls when lock is held, got %d: %+v", len(fr.calls), fr.calls)
 	}
 }
+
+var errSystemctlMissing = errors.New("exec: \"systemctl\": executable file not found in $PATH")

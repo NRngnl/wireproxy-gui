@@ -80,7 +80,7 @@ func TestImportFromPathPropagatesCodecError(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	wantErr := errors.New("invalid import JSON")
+	wantErr := errInvalidImport
 	fake := &fakeImportSource{err: wantErr}
 	_, err = ImportFromPath(fake, path)
 	if !errors.Is(err, wantErr) {
@@ -130,7 +130,7 @@ func TestExportToPathWritesWithOwnerOnlyPermissions(t *testing.T) {
 }
 
 func TestExportToPathPropagatesCodecError(t *testing.T) {
-	wantErr := errors.New("profile was not found")
+	wantErr := errProfileNotFound
 	fake := &fakeExportSource{err: wantErr}
 	err := ExportToPath(fake, filepath.Join(t.TempDir(), "export.json"), nil)
 	if !errors.Is(err, wantErr) {
@@ -144,3 +144,6 @@ func TestPathPromptSubmit(t *testing.T) {
 		t.Fatalf("Submit() = %q, want %q", got, "/tmp/default.json")
 	}
 }
+
+var errInvalidImport = errors.New("invalid import JSON")
+var errProfileNotFound = errors.New("profile was not found")

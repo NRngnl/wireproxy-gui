@@ -1,6 +1,7 @@
 package svcinstall
 
 import (
+	"context"
 	"encoding/xml"
 	"os"
 	"os/exec"
@@ -122,7 +123,7 @@ func TestRenderedPlist_PlutilLint(t *testing.T) {
 		t.Fatalf("writing rendered plist for plutil: %v", err)
 	}
 
-	out, err := exec.Command("plutil", "-lint", path).CombinedOutput()
+	out, err := exec.CommandContext(context.Background(), "plutil", "-lint", path).CombinedOutput()
 	if err != nil {
 		t.Fatalf("plutil -lint failed: %v\n%s", err, out)
 	}

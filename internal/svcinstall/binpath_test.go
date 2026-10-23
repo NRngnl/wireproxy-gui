@@ -51,7 +51,7 @@ func (f fakeFileInfo) IsDir() bool        { return f.dir }
 func (f fakeFileInfo) Sys() any           { return nil }
 
 func alwaysFailExecutable() (string, error) {
-	return "", errors.New("no executable in this fake environment")
+	return "", errNoExecutable
 }
 
 func identityEvalSymlinks(p string) (string, error) {
@@ -277,3 +277,5 @@ func TestResolveDaemonBinaryPath_SymlinkResolution_Override(t *testing.T) {
 		t.Fatalf("got %q, want resolved real path %q", got, wantReal)
 	}
 }
+
+var errNoExecutable = errors.New("no executable in this fake environment")

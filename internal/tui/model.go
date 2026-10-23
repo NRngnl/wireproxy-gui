@@ -464,7 +464,7 @@ func (m *model) openServicePanel() (tea.Model, tea.Cmd) {
 	if !supported {
 		return m, nil
 	}
-	return m, screens.LoadStatusCmd(m.svc, context.Background(), m.serviceGen)
+	return m, screens.LoadStatusCmd(context.Background(), m.svc, m.serviceGen)
 }
 
 // updateService forwards a key message to the active service panel,
@@ -481,11 +481,11 @@ func (m *model) updateService(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if install || forceInstall {
 		m.serviceModel.Busy = true
 		opts := svcinstall.Options{Force: forceInstall}
-		return m, screens.InstallCmd(m.svc, context.Background(), opts, m.serviceGen)
+		return m, screens.InstallCmd(context.Background(), m.svc, opts, m.serviceGen)
 	}
 	if uninstall {
 		m.serviceModel.Busy = true
-		return m, screens.UninstallCmd(m.svc, context.Background(), m.serviceGen)
+		return m, screens.UninstallCmd(context.Background(), m.svc, m.serviceGen)
 	}
 	return m, nil
 }
@@ -605,8 +605,7 @@ func (m *model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch kind {
-	case confirmDelete:
+	if kind == confirmDelete {
 		err := m.core.Delete(selectedID)
 		if err != nil {
 			m.lastActionErr = err
@@ -645,7 +644,7 @@ func (m *model) openExitNodePicker() (tea.Model, tea.Cmd) {
 	m.exitNode.SetLoading(true)
 	m.exitNodeProfileID = item.ID
 	m.mode = modeExitNode
-	return m, screens.LoadExitNodesCmd(m.core, context.Background(), item.ID)
+	return m, screens.LoadExitNodesCmd(context.Background(), m.core, item.ID)
 }
 
 // updateExitNode forwards a key message to the active exit-node picker,

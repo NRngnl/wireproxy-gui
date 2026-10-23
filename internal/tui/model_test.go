@@ -268,7 +268,7 @@ func TestViewRendersEmptyStateWhenNoProfiles(t *testing.T) {
 
 func TestViewRendersLoadErrorBanner(t *testing.T) {
 	app := newFakeApplication()
-	m := newModel(app, errors.New("boom"))
+	m := newModel(app, errBoom)
 
 	view := m.View()
 	if !contains(view, "Failed to load profiles") {
@@ -384,7 +384,7 @@ func TestConnectKeyNoOpWhenRuntimeLocked(t *testing.T) {
 
 func TestConnectErrorPopulatesVisibleErrorState(t *testing.T) {
 	app := newFakeApplication(newTestProfile("alpha", 1080))
-	app.connectErr = errors.New("boom")
+	app.connectErr = errBoom
 	m := newModel(app, nil)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
@@ -433,7 +433,7 @@ func TestAddKeyOpensFormAndSubmitCallsSave(t *testing.T) {
 
 func TestAddFormSaveErrorSurfacesAsLastActionErr(t *testing.T) {
 	app := newFakeApplication()
-	app.saveErr = errors.New("save failed")
+	app.saveErr = errSaveFailed
 	m := newModel(app, nil)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
@@ -804,3 +804,6 @@ func TestLoginKeyCallsLoginDirectly(t *testing.T) {
 		t.Fatalf("expected Login not to open a form/mode, got mode=%v", m.mode)
 	}
 }
+
+var errSaveFailed = errors.New("save failed")
+var errBoom = errors.New("boom")

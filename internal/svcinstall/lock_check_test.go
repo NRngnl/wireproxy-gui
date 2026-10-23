@@ -19,7 +19,7 @@ func TestCheckLockBeforeInstall_HeldNoForce(t *testing.T) {
 	if !ok {
 		t.Fatal("expected to acquire lock in test setup")
 	}
-	defer l.Release()
+	defer func() { _ = l.Release() }()
 
 	err = checkLockBeforeInstall(storePath, false)
 	if !errors.Is(err, ErrLockHeld) {
@@ -38,7 +38,7 @@ func TestCheckLockBeforeInstall_HeldWithForce(t *testing.T) {
 	if !ok {
 		t.Fatal("expected to acquire lock in test setup")
 	}
-	defer l.Release()
+	defer func() { _ = l.Release() }()
 
 	err = checkLockBeforeInstall(storePath, true)
 	if err != nil {
