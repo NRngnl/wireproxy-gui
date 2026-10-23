@@ -464,7 +464,7 @@ func (m *model) openServicePanel() (tea.Model, tea.Cmd) {
 	if !supported {
 		return m, nil
 	}
-	return m, screens.LoadStatusCmd(m.svc, context.Background(), m.serviceGen)
+	return m, screens.LoadStatusCmd(context.Background(), m.svc, m.serviceGen)
 }
 
 // updateService forwards a key message to the active service panel,
@@ -481,11 +481,11 @@ func (m *model) updateService(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if install || forceInstall {
 		m.serviceModel.Busy = true
 		opts := svcinstall.Options{Force: forceInstall}
-		return m, screens.InstallCmd(m.svc, context.Background(), opts, m.serviceGen)
+		return m, screens.InstallCmd(context.Background(), m.svc, opts, m.serviceGen)
 	}
 	if uninstall {
 		m.serviceModel.Busy = true
-		return m, screens.UninstallCmd(m.svc, context.Background(), m.serviceGen)
+		return m, screens.UninstallCmd(context.Background(), m.svc, m.serviceGen)
 	}
 	return m, nil
 }
@@ -605,9 +605,9 @@ func (m *model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch kind {
-	case confirmDelete:
-		if err := m.core.Delete(selectedID); err != nil {
+	if kind == confirmDelete {
+		err := m.core.Delete(selectedID)
+		if err != nil {
 			m.lastActionErr = err
 			return m, nil
 		}
@@ -644,7 +644,7 @@ func (m *model) openExitNodePicker() (tea.Model, tea.Cmd) {
 	m.exitNode.SetLoading(true)
 	m.exitNodeProfileID = item.ID
 	m.mode = modeExitNode
-	return m, screens.LoadExitNodesCmd(m.core, context.Background(), item.ID)
+	return m, screens.LoadExitNodesCmd(context.Background(), m.core, item.ID)
 }
 
 // updateExitNode forwards a key message to the active exit-node picker,
@@ -673,7 +673,8 @@ func (m *model) updateExitNode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		existing.TailscaleConfig.ExitNode = selected.ID
-		if _, err := m.core.Save(existing); err != nil {
+		_, err := m.core.Save(existing)
+		if err != nil {
 			m.lastActionErr = err
 			return m, nil
 		}
@@ -694,7 +695,8 @@ func (m *model) doLogin() {
 	if m.list.selectedID == "" {
 		return
 	}
-	if err := m.core.Login(m.list.selectedID); err != nil {
+	err := m.core.Login(m.list.selectedID)
+	if err != nil {
 		m.lastActionErr = err
 		return
 	}
@@ -709,7 +711,8 @@ func (m *model) doLogout() (tea.Model, tea.Cmd) {
 	if m.list.selectedID == "" {
 		return m, nil
 	}
-	if err := m.core.Logout(context.Background(), m.list.selectedID); err != nil {
+	err := m.core.Logout(context.Background(), m.list.selectedID)
+	if err != nil {
 		m.lastActionErr = err
 		return m, nil
 	}
@@ -779,7 +782,8 @@ func (m *model) updateImportExport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for _, p := range profiles {
 				ids = append(ids, p.ID)
 			}
-			if err := screens.ExportToPath(m.core, path, ids); err != nil {
+			err := screens.ExportToPath(m.core, path, ids)
+			if err != nil {
 				m.lastActionErr = err
 				return m, nil
 			}
@@ -823,7 +827,8 @@ func (m *model) doConnect() {
 		m.toast = "profile is starting/stopping, please wait"
 		return
 	}
-	if err := m.core.Connect(m.list.selectedID); err != nil {
+	err := m.core.Connect(m.list.selectedID)
+	if err != nil {
 		m.lastActionErr = err
 		return
 	}
@@ -833,7 +838,8 @@ func (m *model) doConnect() {
 // doConnectAll handles the ConnectAll keybinding.
 func (m *model) doConnectAll() {
 	m.clearTransientMessages()
-	if err := m.core.ConnectAll(); err != nil {
+	err := m.core.ConnectAll()
+	if err != nil {
 		m.lastActionErr = err
 		return
 	}
@@ -860,10 +866,7 @@ func (m *model) moveSelection(delta int) {
 	if len(m.list.items) == 0 {
 		return
 	}
-	next := m.list.selected + delta
-	if next < 0 {
-		next = 0
-	}
+	next := max(m.list.selected+delta, 0)
 	if next >= len(m.list.items) {
 		next = len(m.list.items) - 1
 	}
@@ -883,14 +886,8 @@ func (m *model) applyLayout() {
 		return
 	}
 	const logWidthFraction = 0.4
-	logWidth := int(float64(m.width) * logWidthFraction)
-	if logWidth < 20 {
-		logWidth = 20
-	}
-	logHeight := m.height - 8
-	if logHeight < 3 {
-		logHeight = 3
-	}
+	logWidth := max(int(float64(m.width)*logWidthFraction), 20)
+	logHeight := max(m.height-8, 3)
 	m.logView.Width = logWidth
 	m.logView.Height = logHeight
 }
@@ -927,6 +924,7 @@ func (m *model) View() string {
 	}
 
 	var body string
+	var bodySb930 strings.Builder
 	for i, item := range m.list.items {
 		line := item.title() + "  " + item.description()
 		if i == m.list.selected {
@@ -934,8 +932,9 @@ func (m *model) View() string {
 		} else {
 			line = "  " + line
 		}
-		body += line + "\n"
+		bodySb930.WriteString(line + "\n")
 	}
+	body += bodySb930.String()
 
 	listPane := sidebarStyle.Render(body)
 	detailPane := detailStyle.Render(m.renderDetail())

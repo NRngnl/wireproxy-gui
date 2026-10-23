@@ -63,7 +63,7 @@ func (f *fakeApp) Changes() <-chan application.Change {
 	return f.changes
 }
 
-func (f *fakeApp) Shutdown(ctx context.Context) error {
+func (f *fakeApp) Shutdown(_ context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.shutdownN++
@@ -72,9 +72,9 @@ func (f *fakeApp) Shutdown(ctx context.Context) error {
 
 func (f *fakeApp) Profiles() []profile.Profile { return nil }
 
-func (f *fakeApp) Status(profileID string) application.Status { return application.StatusStopped }
+func (f *fakeApp) Status(_ string) application.Status { return application.StatusStopped }
 
-func (f *fakeApp) Logs(profileID string) []application.LogEntry { return nil }
+func (f *fakeApp) Logs(_ string) []application.LogEntry { return nil }
 
 func (f *fakeApp) Load() error {
 	f.mu.Lock()
@@ -119,7 +119,10 @@ func TestRun_CallsAutoConnectOnce(t *testing.T) {
 	cancel()
 
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run() error = %v", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return in time")
 	}
@@ -186,7 +189,10 @@ func TestRun_ChangeProducesLogLine(t *testing.T) {
 
 	cancel()
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run() error = %v", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return in time")
 	}
@@ -207,7 +213,7 @@ func TestRun_LoadErrDoesNotFailRun(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	loadErr := errors.New("boom: failed to load store")
+	loadErr := errLoadStore
 
 	done := make(chan error, 1)
 	go func() {
@@ -250,7 +256,8 @@ func TestRun_HangupTriggersReload(t *testing.T) {
 	// handler before sending the signal.
 	time.Sleep(50 * time.Millisecond)
 
-	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+	err := syscall.Kill(os.Getpid(), syscall.SIGHUP)
+	if err != nil {
 		t.Fatalf("failed to send SIGHUP to test process: %v", err)
 	}
 
@@ -266,7 +273,10 @@ func TestRun_HangupTriggersReload(t *testing.T) {
 
 	cancel()
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run() error = %v", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return in time")
 	}
@@ -283,3 +293,5 @@ func TestRun_HangupTriggersReload(t *testing.T) {
 		t.Fatalf("expected SIGHUP reload log line, got: %s", buf.String())
 	}
 }
+
+var errLoadStore = errors.New("boom: failed to load store")

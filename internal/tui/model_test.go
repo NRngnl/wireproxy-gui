@@ -268,7 +268,7 @@ func TestViewRendersEmptyStateWhenNoProfiles(t *testing.T) {
 
 func TestViewRendersLoadErrorBanner(t *testing.T) {
 	app := newFakeApplication()
-	m := newModel(app, errors.New("boom"))
+	m := newModel(app, errBoom)
 
 	view := m.View()
 	if !contains(view, "Failed to load profiles") {
@@ -384,7 +384,7 @@ func TestConnectKeyNoOpWhenRuntimeLocked(t *testing.T) {
 
 func TestConnectErrorPopulatesVisibleErrorState(t *testing.T) {
 	app := newFakeApplication(newTestProfile("alpha", 1080))
-	app.connectErr = errors.New("boom")
+	app.connectErr = errBoom
 	m := newModel(app, nil)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
@@ -433,7 +433,7 @@ func TestAddKeyOpensFormAndSubmitCallsSave(t *testing.T) {
 
 func TestAddFormSaveErrorSurfacesAsLastActionErr(t *testing.T) {
 	app := newFakeApplication()
-	app.saveErr = errors.New("save failed")
+	app.saveErr = errSaveFailed
 	m := newModel(app, nil)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
@@ -468,7 +468,7 @@ func TestEscapeCancelsOpenForm(t *testing.T) {
 		t.Fatalf("expected esc to return to modeList, got %v", m.mode)
 	}
 	if len(app.saveCalls) != 0 {
-		t.Fatalf("expected Save not to be called after cancelling with esc")
+		t.Fatalf("expected Save not to be called after canceling with esc")
 	}
 }
 
@@ -506,10 +506,10 @@ func TestDeleteKeyThenOtherKeyCancels(t *testing.T) {
 	m = updated.(*model)
 
 	if m.mode != modeList {
-		t.Fatalf("expected mode=modeList after cancelling delete, got %v", m.mode)
+		t.Fatalf("expected mode=modeList after canceling delete, got %v", m.mode)
 	}
 	if len(app.deleteCalls) != 0 {
-		t.Fatalf("expected Delete not to be called after cancelling, got calls: %v", app.deleteCalls)
+		t.Fatalf("expected Delete not to be called after canceling, got calls: %v", app.deleteCalls)
 	}
 }
 
@@ -804,3 +804,6 @@ func TestLoginKeyCallsLoginDirectly(t *testing.T) {
 		t.Fatalf("expected Login not to open a form/mode, got mode=%v", m.mode)
 	}
 }
+
+var errSaveFailed = errors.New("save failed")
+var errBoom = errors.New("boom")

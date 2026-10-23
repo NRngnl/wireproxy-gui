@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,12 +38,14 @@ func (i ExitNodeItem) Title() string {
 // Description returns the node's tailnet IPs joined for display.
 func (i ExitNodeItem) Description() string {
 	desc := ""
+	var descSb40 strings.Builder
 	for idx, ip := range i.Node.TailscaleIPs {
 		if idx > 0 {
-			desc += ", "
+			descSb40.WriteString(", ")
 		}
-		desc += ip
+		descSb40.WriteString(ip)
 	}
+	desc += descSb40.String()
 	return desc
 }
 
@@ -152,7 +155,7 @@ type ExitNodesErrMsg struct {
 // profileID) and reports the result as an ExitNodesLoadedMsg or
 // ExitNodesErrMsg. The caller (model.go) owns dispatching this command and
 // handling the resulting messages.
-func LoadExitNodesCmd(app exitNodeSource, ctx context.Context, profileID string) tea.Cmd {
+func LoadExitNodesCmd(ctx context.Context, app exitNodeSource, profileID string) tea.Cmd {
 	return func() tea.Msg {
 		nodes, err := app.ExitNodes(ctx, profileID)
 		if err != nil {

@@ -53,7 +53,8 @@ var (
 //     searched, so the failure is actionable for a user.
 func resolveDaemonBinaryPath(override string) (string, error) {
 	if override != "" {
-		if resolved, err := filepathEvalSymlinks(override); err == nil {
+		resolved, err := filepathEvalSymlinks(override)
+		if err == nil {
 			return resolved, nil
 		}
 		return override, nil
@@ -62,22 +63,28 @@ func resolveDaemonBinaryPath(override string) (string, error) {
 	name := daemonBinaryName()
 	var siblingAttempted string
 
-	if self, err := osExecutable(); err == nil {
-		if realSelf, err := filepathEvalSymlinks(self); err == nil {
+	self, err := osExecutable()
+	if err == nil {
+		realSelf, err := filepathEvalSymlinks(self)
+		if err == nil {
 			self = realSelf
 		}
 		sibling := filepath.Join(filepath.Dir(self), name)
 		siblingAttempted = sibling
-		if info, err := osStat(sibling); err == nil && info.Mode().IsRegular() {
-			if resolved, err := filepathEvalSymlinks(sibling); err == nil {
+		info, err := osStat(sibling)
+		if err == nil && info.Mode().IsRegular() {
+			resolved, err := filepathEvalSymlinks(sibling)
+			if err == nil {
 				return resolved, nil
 			}
 			return sibling, nil
 		}
 	}
 
-	if found, err := execLookPath(name); err == nil {
-		if resolved, err := filepathEvalSymlinks(found); err == nil {
+	found, err := execLookPath(name)
+	if err == nil {
+		resolved, err := filepathEvalSymlinks(found)
+		if err == nil {
 			return resolved, nil
 		}
 		return found, nil

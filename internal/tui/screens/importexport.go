@@ -88,7 +88,8 @@ func ExportToPath(app exportSource, path string, profileIDs []string) error {
 	if err != nil {
 		return fmt.Errorf("write export file: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	err = os.Chmod(path, 0o600)
+	if err != nil {
 		return fmt.Errorf("chmod export file: %w", err)
 	}
 	return nil

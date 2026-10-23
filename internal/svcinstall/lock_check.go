@@ -17,7 +17,7 @@ func checkLockBeforeInstall(storePath string, force bool) error {
 	}
 	held, err := lock.Probe(storePath + ".lock")
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // lock.Probe errors are treated as not-held so a fresh install is not blocked
 	}
 	if held {
 		return ErrLockHeld

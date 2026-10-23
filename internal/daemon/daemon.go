@@ -47,7 +47,8 @@ func Run(ctx context.Context, core Application, loadErr error, logger *slog.Logg
 		logger.Warn("failed to load profile store", "error", loadErr)
 	}
 
-	if err := core.AutoConnect(); err != nil {
+	err := core.AutoConnect()
+	if err != nil {
 		logger.Warn("auto-connect failed", "error", err)
 	}
 
@@ -84,12 +85,14 @@ func Run(ctx context.Context, core Application, loadErr error, logger *slog.Logg
 			)
 		case <-hangup:
 			logger.Info("reload requested (SIGHUP)")
-			if err := core.Load(); err != nil {
+			err := core.Load()
+			if err != nil {
 				logger.Warn("reload: failed to load profile store", "error", err)
 			} else {
 				logger.Info("reload: profile store reloaded")
 			}
-			if err := core.AutoConnect(); err != nil {
+			err = core.AutoConnect()
+			if err != nil {
 				logger.Warn("reload: auto-connect failed", "error", err)
 			} else {
 				logger.Info("reload: auto-connect complete")

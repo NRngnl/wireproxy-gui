@@ -42,10 +42,6 @@ type ServicePanel struct {
 	// tea.Cmd), during which key presses other than the outcome message
 	// are ignored.
 	Busy bool
-
-	// resolved/confirmedInstall/confirmedUninstall record the outcome
-	// once the user has pressed a key to act on the current status.
-	resolved bool
 }
 
 // NewServicePanel constructs a ServicePanel in its initial loading state.
@@ -75,7 +71,7 @@ type ActionResultMsg struct {
 
 // LoadStatusCmd returns a tea.Cmd that calls svc.Status(ctx) and reports
 // the result as a StatusResultMsg carrying gen.
-func LoadStatusCmd(svc svcinstall.Installer, ctx context.Context, gen int) tea.Cmd {
+func LoadStatusCmd(ctx context.Context, svc svcinstall.Installer, gen int) tea.Cmd {
 	return func() tea.Msg {
 		status, err := svc.Status(ctx)
 		return StatusResultMsg{Status: status, Err: err, Gen: gen}
@@ -84,7 +80,7 @@ func LoadStatusCmd(svc svcinstall.Installer, ctx context.Context, gen int) tea.C
 
 // InstallCmd returns a tea.Cmd that calls svc.Install(ctx, opts) and
 // reports the result as an ActionResultMsg carrying gen.
-func InstallCmd(svc svcinstall.Installer, ctx context.Context, opts svcinstall.Options, gen int) tea.Cmd {
+func InstallCmd(ctx context.Context, svc svcinstall.Installer, opts svcinstall.Options, gen int) tea.Cmd {
 	return func() tea.Msg {
 		err := svc.Install(ctx, opts)
 		return ActionResultMsg{Installed: true, Err: err, Gen: gen}
@@ -93,7 +89,7 @@ func InstallCmd(svc svcinstall.Installer, ctx context.Context, opts svcinstall.O
 
 // UninstallCmd returns a tea.Cmd that calls svc.Uninstall(ctx) and
 // reports the result as an ActionResultMsg carrying gen.
-func UninstallCmd(svc svcinstall.Installer, ctx context.Context, gen int) tea.Cmd {
+func UninstallCmd(ctx context.Context, svc svcinstall.Installer, gen int) tea.Cmd {
 	return func() tea.Msg {
 		err := svc.Uninstall(ctx)
 		return ActionResultMsg{Installed: false, Err: err, Gen: gen}

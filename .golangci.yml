@@ -54,7 +54,7 @@ linters:
       rules:
         logging:
           deny:
-            - pkg: log
+            - pkg: log$
               desc: Use log/slog for logging.
     misspell:
       locale: US

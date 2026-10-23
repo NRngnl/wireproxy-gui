@@ -50,5 +50,5 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.15.0
           args: --build-tags=ci --max-issues-per-linter=0 --max-same-issues=0

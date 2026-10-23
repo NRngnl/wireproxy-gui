@@ -19,9 +19,10 @@ func TestCheckLockBeforeInstall_HeldNoForce(t *testing.T) {
 	if !ok {
 		t.Fatal("expected to acquire lock in test setup")
 	}
-	defer l.Release()
+	defer func() { _ = l.Release() }()
 
-	if err := checkLockBeforeInstall(storePath, false); !errors.Is(err, ErrLockHeld) {
+	err = checkLockBeforeInstall(storePath, false)
+	if !errors.Is(err, ErrLockHeld) {
 		t.Fatalf("checkLockBeforeInstall() = %v, want ErrLockHeld", err)
 	}
 }
@@ -37,9 +38,10 @@ func TestCheckLockBeforeInstall_HeldWithForce(t *testing.T) {
 	if !ok {
 		t.Fatal("expected to acquire lock in test setup")
 	}
-	defer l.Release()
+	defer func() { _ = l.Release() }()
 
-	if err := checkLockBeforeInstall(storePath, true); err != nil {
+	err = checkLockBeforeInstall(storePath, true)
+	if err != nil {
 		t.Fatalf("checkLockBeforeInstall() with force = %v, want nil", err)
 	}
 }
@@ -48,7 +50,8 @@ func TestCheckLockBeforeInstall_Free(t *testing.T) {
 	dir := t.TempDir()
 	storePath := filepath.Join(dir, "store.json")
 
-	if err := checkLockBeforeInstall(storePath, false); err != nil {
+	err := checkLockBeforeInstall(storePath, false)
+	if err != nil {
 		t.Fatalf("checkLockBeforeInstall() = %v, want nil for a free lock", err)
 	}
 }
@@ -57,7 +60,8 @@ func TestCheckLockBeforeInstall_MissingDirectoryNotBlocking(t *testing.T) {
 	dir := t.TempDir()
 	storePath := filepath.Join(dir, "does", "not", "exist", "store.json")
 
-	if err := checkLockBeforeInstall(storePath, false); err != nil {
+	err := checkLockBeforeInstall(storePath, false)
+	if err != nil {
 		t.Fatalf("checkLockBeforeInstall() = %v, want nil when the lock probe errors", err)
 	}
 }

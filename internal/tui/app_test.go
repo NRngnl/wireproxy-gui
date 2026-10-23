@@ -21,7 +21,7 @@ type shutdownTrackingApplication struct {
 	shutdownErr    error
 }
 
-func (f *shutdownTrackingApplication) Shutdown(ctx context.Context) error {
+func (f *shutdownTrackingApplication) Shutdown(_ context.Context) error {
 	f.shutdownCalled++
 	return f.shutdownErr
 }
@@ -64,7 +64,7 @@ func TestRunCallsShutdownOnQuit(t *testing.T) {
 // program.Run() itself succeeds but core.Shutdown fails.
 func TestRunReturnsShutdownErrorWhenRunSucceeds(t *testing.T) {
 	app := newShutdownTrackingApplication()
-	app.shutdownErr = errors.New("shutdown boom")
+	app.shutdownErr = errShutdownBoom
 
 	input := strings.NewReader("q")
 
@@ -90,3 +90,5 @@ func TestRunReturnsShutdownErrorWhenRunSucceeds(t *testing.T) {
 		t.Fatalf("expected error to mention shutdown failure, got: %v", err)
 	}
 }
+
+var errShutdownBoom = errors.New("shutdown boom")

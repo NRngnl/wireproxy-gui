@@ -66,7 +66,8 @@ func (linuxInstaller) Status(ctx context.Context) (Status, error) {
 	}
 
 	status := Status{}
-	if _, statErr := os.Stat(path); statErr == nil {
+	_, statErr := os.Stat(path)
+	if statErr == nil {
 		status.Installed = true
 		status.UnitPath = path
 	} else if !errors.Is(statErr, os.ErrNotExist) {
@@ -116,8 +117,7 @@ func systemctlQueryState(ctx context.Context, subcommand string) (bool, error) {
 		return trimmed == "enabled" || trimmed == "active", nil
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if _, ok := errors.AsType[*exec.ExitError](err); ok {
 		// A recognized negative-but-successful query result: not an
 		// error, just false.
 		switch trimmed {
@@ -142,7 +142,8 @@ func (linuxInstaller) Install(ctx context.Context, opts Options) error {
 		storePath = resolved
 	}
 
-	if err := checkLockBeforeInstall(storePath, opts.Force); err != nil {
+	err := checkLockBeforeInstall(storePath, opts.Force)
+	if err != nil {
 		return err
 	}
 
@@ -163,19 +164,23 @@ func (linuxInstaller) Install(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	err = os.MkdirAll(dir, 0o755)
+	if err != nil {
 		return fmt.Errorf("svcinstall: creating unit directory %q: %w", dir, err)
 	}
 
 	path := filepath.Join(dir, unitFileName)
-	if err := os.WriteFile(path, rendered, 0o644); err != nil {
+	err = os.WriteFile(path, rendered, 0o600)
+	if err != nil {
 		return fmt.Errorf("svcinstall: writing unit file %q: %w", path, err)
 	}
 
-	if _, err := runCommand(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
+	_, err = runCommand(ctx, "systemctl", "--user", "daemon-reload")
+	if err != nil {
 		return fmt.Errorf("svcinstall: systemctl --user daemon-reload: %w", err)
 	}
-	if _, err := runCommand(ctx, "systemctl", "--user", "enable", "--now", unitFileName); err != nil {
+	_, err = runCommand(ctx, "systemctl", "--user", "enable", "--now", unitFileName)
+	if err != nil {
 		return fmt.Errorf("svcinstall: systemctl --user enable --now %s: %w", unitFileName, err)
 	}
 
@@ -188,24 +193,29 @@ func (linuxInstaller) Uninstall(ctx context.Context) error {
 		return err
 	}
 
-	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+	_, statErr := os.Stat(path)
+	if errors.Is(statErr, os.ErrNotExist) {
 		return nil
 	} else if statErr != nil {
 		return statErr
 	}
 
-	if err := systemctlTolerant(ctx, "stop"); err != nil {
+	err = systemctlTolerant(ctx, "stop")
+	if err != nil {
 		return err
 	}
-	if err := systemctlTolerant(ctx, "disable"); err != nil {
+	err = systemctlTolerant(ctx, "disable")
+	if err != nil {
 		return err
 	}
 
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	err = os.Remove(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("svcinstall: removing unit file %q: %w", path, err)
 	}
 
-	if _, err := runCommand(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
+	_, err = runCommand(ctx, "systemctl", "--user", "daemon-reload")
+	if err != nil {
 		return fmt.Errorf("svcinstall: systemctl --user daemon-reload: %w", err)
 	}
 
@@ -223,7 +233,8 @@ func (linuxInstaller) Uninstall(ctx context.Context) error {
 // here therefore indicates a genuine invocation failure (systemctl not
 // found, permission denied, unit file invalid, etc.) and is propagated.
 func systemctlTolerant(ctx context.Context, subcommand string) error {
-	if _, err := runCommand(ctx, "systemctl", "--user", subcommand, unitFileName); err != nil {
+	_, err := runCommand(ctx, "systemctl", "--user", subcommand, unitFileName)
+	if err != nil {
 		return fmt.Errorf("svcinstall: systemctl --user %s %s: %w", subcommand, unitFileName, err)
 	}
 	return nil

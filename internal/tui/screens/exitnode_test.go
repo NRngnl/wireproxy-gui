@@ -55,7 +55,7 @@ type fakeExitNodeSource struct {
 	err   error
 }
 
-func (f fakeExitNodeSource) ExitNodes(ctx context.Context, profileID string) ([]connection.ExitNode, error) {
+func (f fakeExitNodeSource) ExitNodes(_ context.Context, _ string) ([]connection.ExitNode, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -64,7 +64,7 @@ func (f fakeExitNodeSource) ExitNodes(ctx context.Context, profileID string) ([]
 
 func TestLoadExitNodesCmdSuccess(t *testing.T) {
 	nodes := []connection.ExitNode{{ID: "n1", Name: "node-one"}}
-	cmd := LoadExitNodesCmd(fakeExitNodeSource{nodes: nodes}, context.Background(), "profile-1")
+	cmd := LoadExitNodesCmd(context.Background(), fakeExitNodeSource{nodes: nodes}, "profile-1")
 
 	msg := cmd()
 	loaded, ok := msg.(ExitNodesLoadedMsg)
@@ -80,8 +80,8 @@ func TestLoadExitNodesCmdSuccess(t *testing.T) {
 }
 
 func TestLoadExitNodesCmdError(t *testing.T) {
-	wantErr := errors.New("boom")
-	cmd := LoadExitNodesCmd(fakeExitNodeSource{err: wantErr}, context.Background(), "profile-1")
+	wantErr := errBoom
+	cmd := LoadExitNodesCmd(context.Background(), fakeExitNodeSource{err: wantErr}, "profile-1")
 
 	msg := cmd()
 	errMsg, ok := msg.(ExitNodesErrMsg)
@@ -92,3 +92,5 @@ func TestLoadExitNodesCmdError(t *testing.T) {
 		t.Fatalf("unexpected ExitNodesErrMsg: %#v", errMsg)
 	}
 }
+
+var errBoom = errors.New("boom")
