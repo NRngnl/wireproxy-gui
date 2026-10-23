@@ -19,7 +19,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
 )
 
@@ -832,11 +831,11 @@ func TestTailscaleAuthLogEmitterRewritesSavedStateAuthKeyNotice(t *testing.T) {
 }
 
 func TestRealNodeCloseBeforeUpReturnsError(t *testing.T) {
-	node := &realNode{server: &tsnet.Server{}}
+	node := &realNode{}
 
 	err := node.Close()
-	if err == nil {
-		t.Fatal("expected close error for unstarted server")
+	if !errors.Is(err, errCloseNode) {
+		t.Fatalf("Close() error = %v, want errCloseNode", err)
 	}
 }
 

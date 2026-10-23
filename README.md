@@ -30,7 +30,7 @@ as `127.0.0.1:1080`.
 
 ## Requirements
 
-- Go 1.26.4.
+- Go 1.27.3.
 - macOS, Linux, or Windows with GUI support from Fyne.
 - `mise` is optional, but the repo includes `.mise.toml` for tool pinning.
 - No separate `wireproxy`, `tailscale`, or `tailscaled` binary is required.
