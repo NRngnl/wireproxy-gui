@@ -91,7 +91,7 @@ func Run(ctx context.Context, core Application, loadErr error, logger *slog.Logg
 			} else {
 				logger.Info("reload: profile store reloaded")
 			}
-			err := core.AutoConnect()
+			err = core.AutoConnect()
 			if err != nil {
 				logger.Warn("reload: auto-connect failed", "error", err)
 			} else {

@@ -162,13 +162,13 @@ func TestUninstallInstalledStopsDisablesRemovesReloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, unitFileName)
-	err := os.WriteFile(path, []byte("[Unit]\n"), 0o644)
+	err = os.WriteFile(path, []byte("[Unit]\n"), 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	installer := linuxInstaller{}
-	err := installer.Uninstall(context.Background())
+	err = installer.Uninstall(context.Background())
 	if err != nil {
 		t.Fatalf("Uninstall() error = %v", err)
 	}

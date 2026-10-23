@@ -866,10 +866,7 @@ func (m *model) moveSelection(delta int) {
 	if len(m.list.items) == 0 {
 		return
 	}
-	next := m.list.selected + delta
-	if next < 0 {
-		next = 0
-	}
+	next := max(m.list.selected+delta, 0)
 	if next >= len(m.list.items) {
 		next = len(m.list.items) - 1
 	}
@@ -889,14 +886,8 @@ func (m *model) applyLayout() {
 		return
 	}
 	const logWidthFraction = 0.4
-	logWidth := int(float64(m.width) * logWidthFraction)
-	if logWidth < 20 {
-		logWidth = 20
-	}
-	logHeight := m.height - 8
-	if logHeight < 3 {
-		logHeight = 3
-	}
+	logWidth := max(int(float64(m.width)*logWidthFraction), 20)
+	logHeight := max(m.height-8, 3)
 	m.logView.Width = logWidth
 	m.logView.Height = logHeight
 }

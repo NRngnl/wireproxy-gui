@@ -86,7 +86,7 @@ func run(args []string) int {
 		return exitUsage
 	}
 
-	err := tui.Run(core, loadErr)
+	err = tui.Run(core, loadErr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "wireproxy-tui:", err)
 		return exitError
