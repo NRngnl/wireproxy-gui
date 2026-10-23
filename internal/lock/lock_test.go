@@ -19,7 +19,8 @@ func TestTryLockSucceedsAndReturnsLock(t *testing.T) {
 		t.Fatal("TryLock() returned nil Lock with ok = true")
 	}
 	t.Cleanup(func() {
-		if err := l.Release(); err != nil {
+		err := l.Release()
+		if err != nil {
 			t.Errorf("Release() error = %v", err)
 		}
 	})
@@ -36,7 +37,8 @@ func TestTryLockContentionFromSecondDescriptor(t *testing.T) {
 		t.Fatal("first TryLock() did not acquire the lock")
 	}
 	defer func() {
-		if err := first.Release(); err != nil {
+		err := first.Release()
+		if err != nil {
 			t.Errorf("Release() error = %v", err)
 		}
 	}()

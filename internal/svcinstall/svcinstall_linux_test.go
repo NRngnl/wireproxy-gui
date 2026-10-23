@@ -142,7 +142,8 @@ func TestUninstallNoUnitFileIsNoOp(t *testing.T) {
 	fr.install(t)
 
 	installer := linuxInstaller{}
-	if err := installer.Uninstall(context.Background()); err != nil {
+	err := installer.Uninstall(context.Background())
+	if err != nil {
 		t.Fatalf("Uninstall() error = %v, want nil", err)
 	}
 	if len(fr.calls) != 0 {
@@ -156,16 +157,19 @@ func TestUninstallInstalledStopsDisablesRemovesReloads(t *testing.T) {
 	fr.install(t)
 
 	dir := filepath.Join(home, ".config", "systemd", "user")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	err := os.MkdirAll(dir, 0o755)
+	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, unitFileName)
-	if err := os.WriteFile(path, []byte("[Unit]\n"), 0o644); err != nil {
+	err := os.WriteFile(path, []byte("[Unit]\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	installer := linuxInstaller{}
-	if err := installer.Uninstall(context.Background()); err != nil {
+	err := installer.Uninstall(context.Background())
+	if err != nil {
 		t.Fatalf("Uninstall() error = %v", err)
 	}
 

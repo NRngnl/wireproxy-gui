@@ -607,7 +607,8 @@ func (m *model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch kind {
 	case confirmDelete:
-		if err := m.core.Delete(selectedID); err != nil {
+		err := m.core.Delete(selectedID)
+		if err != nil {
 			m.lastActionErr = err
 			return m, nil
 		}
@@ -694,7 +695,8 @@ func (m *model) doLogin() {
 	if m.list.selectedID == "" {
 		return
 	}
-	if err := m.core.Login(m.list.selectedID); err != nil {
+	err := m.core.Login(m.list.selectedID)
+	if err != nil {
 		m.lastActionErr = err
 		return
 	}
@@ -709,7 +711,8 @@ func (m *model) doLogout() (tea.Model, tea.Cmd) {
 	if m.list.selectedID == "" {
 		return m, nil
 	}
-	if err := m.core.Logout(context.Background(), m.list.selectedID); err != nil {
+	err := m.core.Logout(context.Background(), m.list.selectedID)
+	if err != nil {
 		m.lastActionErr = err
 		return m, nil
 	}
@@ -779,7 +782,8 @@ func (m *model) updateImportExport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for _, p := range profiles {
 				ids = append(ids, p.ID)
 			}
-			if err := screens.ExportToPath(m.core, path, ids); err != nil {
+			err := screens.ExportToPath(m.core, path, ids)
+			if err != nil {
 				m.lastActionErr = err
 				return m, nil
 			}
@@ -823,7 +827,8 @@ func (m *model) doConnect() {
 		m.toast = "profile is starting/stopping, please wait"
 		return
 	}
-	if err := m.core.Connect(m.list.selectedID); err != nil {
+	err := m.core.Connect(m.list.selectedID)
+	if err != nil {
 		m.lastActionErr = err
 		return
 	}
@@ -833,7 +838,8 @@ func (m *model) doConnect() {
 // doConnectAll handles the ConnectAll keybinding.
 func (m *model) doConnectAll() {
 	m.clearTransientMessages()
-	if err := m.core.ConnectAll(); err != nil {
+	err := m.core.ConnectAll()
+	if err != nil {
 		m.lastActionErr = err
 		return
 	}
@@ -927,6 +933,7 @@ func (m *model) View() string {
 	}
 
 	var body string
+	var bodySb930 strings.Builder
 	for i, item := range m.list.items {
 		line := item.title() + "  " + item.description()
 		if i == m.list.selected {
@@ -934,8 +941,9 @@ func (m *model) View() string {
 		} else {
 			line = "  " + line
 		}
-		body += line + "\n"
+		bodySb930.WriteString(line + "\n")
 	}
+	body += bodySb930.String()
 
 	listPane := sidebarStyle.Render(body)
 	detailPane := detailStyle.Render(m.renderDetail())

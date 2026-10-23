@@ -116,8 +116,7 @@ func systemctlQueryState(ctx context.Context, subcommand string) (bool, error) {
 		return trimmed == "enabled" || trimmed == "active", nil
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if _, ok := errors.AsType[*exec.ExitError](err); ok {
 		// A recognized negative-but-successful query result: not an
 		// error, just false.
 		switch trimmed {

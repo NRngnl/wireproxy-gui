@@ -250,7 +250,8 @@ func TestRun_HangupTriggersReload(t *testing.T) {
 	// handler before sending the signal.
 	time.Sleep(50 * time.Millisecond)
 
-	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+	err := syscall.Kill(os.Getpid(), syscall.SIGHUP)
+	if err != nil {
 		t.Fatalf("failed to send SIGHUP to test process: %v", err)
 	}
 

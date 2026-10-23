@@ -468,7 +468,7 @@ func TestEscapeCancelsOpenForm(t *testing.T) {
 		t.Fatalf("expected esc to return to modeList, got %v", m.mode)
 	}
 	if len(app.saveCalls) != 0 {
-		t.Fatalf("expected Save not to be called after cancelling with esc")
+		t.Fatalf("expected Save not to be called after canceling with esc")
 	}
 }
 
@@ -506,10 +506,10 @@ func TestDeleteKeyThenOtherKeyCancels(t *testing.T) {
 	m = updated.(*model)
 
 	if m.mode != modeList {
-		t.Fatalf("expected mode=modeList after cancelling delete, got %v", m.mode)
+		t.Fatalf("expected mode=modeList after canceling delete, got %v", m.mode)
 	}
 	if len(app.deleteCalls) != 0 {
-		t.Fatalf("expected Delete not to be called after cancelling, got calls: %v", app.deleteCalls)
+		t.Fatalf("expected Delete not to be called after canceling, got calls: %v", app.deleteCalls)
 	}
 }
 

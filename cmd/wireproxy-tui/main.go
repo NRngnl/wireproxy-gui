@@ -41,7 +41,8 @@ func run(args []string) int {
 	connectFlag := fs.String("connect", "", "connect to the named profile and exit")
 	disconnectFlag := fs.String("disconnect", "", "disconnect the named profile and exit")
 
-	if err := fs.Parse(args); err != nil {
+	err := fs.Parse(args)
+	if err != nil {
 		return exitUsage
 	}
 
@@ -85,7 +86,8 @@ func run(args []string) int {
 		return exitUsage
 	}
 
-	if err := tui.Run(core, loadErr); err != nil {
+	err := tui.Run(core, loadErr)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "wireproxy-tui:", err)
 		return exitError
 	}
@@ -119,7 +121,8 @@ func runConnect(core *application.Service, name string) int {
 		fmt.Fprintf(os.Stderr, "wireproxy-tui: no profile named %q\n", name)
 		return exitError
 	}
-	if err := core.Connect(id); err != nil {
+	err := core.Connect(id)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "wireproxy-tui: connect %q: %v\n", name, err)
 		return exitError
 	}

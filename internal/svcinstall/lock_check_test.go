@@ -48,7 +48,8 @@ func TestCheckLockBeforeInstall_Free(t *testing.T) {
 	dir := t.TempDir()
 	storePath := filepath.Join(dir, "store.json")
 
-	if err := checkLockBeforeInstall(storePath, false); err != nil {
+	err := checkLockBeforeInstall(storePath, false)
+	if err != nil {
 		t.Fatalf("checkLockBeforeInstall() = %v, want nil for a free lock", err)
 	}
 }
@@ -57,7 +58,8 @@ func TestCheckLockBeforeInstall_MissingDirectoryNotBlocking(t *testing.T) {
 	dir := t.TempDir()
 	storePath := filepath.Join(dir, "does", "not", "exist", "store.json")
 
-	if err := checkLockBeforeInstall(storePath, false); err != nil {
+	err := checkLockBeforeInstall(storePath, false)
+	if err != nil {
 		t.Fatalf("checkLockBeforeInstall() = %v, want nil when the lock probe errors", err)
 	}
 }
