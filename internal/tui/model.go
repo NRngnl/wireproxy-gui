@@ -674,7 +674,8 @@ func (m *model) updateExitNode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		existing.TailscaleConfig.ExitNode = selected.ID
-		if _, err := m.core.Save(existing); err != nil {
+		_, err := m.core.Save(existing)
+		if err != nil {
 			m.lastActionErr = err
 			return m, nil
 		}

@@ -39,7 +39,8 @@ func TestCheckLockBeforeInstall_HeldWithForce(t *testing.T) {
 	}
 	defer l.Release()
 
-	if err := checkLockBeforeInstall(storePath, true); err != nil {
+	err = checkLockBeforeInstall(storePath, true)
+	if err != nil {
 		t.Fatalf("checkLockBeforeInstall() with force = %v, want nil", err)
 	}
 }

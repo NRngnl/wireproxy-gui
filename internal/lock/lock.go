@@ -42,7 +42,8 @@ func Probe(path string) (bool, error) {
 	if held {
 		return true, nil
 	}
-	if err := lf.unlockAndClose(); err != nil {
+	err = lf.unlockAndClose()
+	if err != nil {
 		return false, err
 	}
 	return false, nil

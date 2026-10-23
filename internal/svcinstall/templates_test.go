@@ -105,7 +105,8 @@ func TestRenderedPlist_PlutilLint(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("plutil is only available on darwin")
 	}
-	if _, err := exec.LookPath("plutil"); err != nil {
+	_, err := exec.LookPath("plutil")
+	if err != nil {
 		t.Skip("plutil not found on PATH")
 	}
 
@@ -116,7 +117,8 @@ func TestRenderedPlist_PlutilLint(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rendered.plist")
-	if err := os.WriteFile(path, got, 0o644); err != nil {
+	err = os.WriteFile(path, got, 0o644)
+	if err != nil {
 		t.Fatalf("writing rendered plist for plutil: %v", err)
 	}
 

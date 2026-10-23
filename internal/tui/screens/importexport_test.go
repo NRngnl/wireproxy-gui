@@ -43,7 +43,8 @@ func TestImportFromPathReadsFileAndCallsImport(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "profiles.json")
 	content := []byte(`{"profiles":[]}`)
-	if err := os.WriteFile(path, content, 0o644); err != nil {
+	err := os.WriteFile(path, content, 0o644)
+	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -74,13 +75,14 @@ func TestImportFromPathMissingFile(t *testing.T) {
 func TestImportFromPathPropagatesCodecError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.json")
-	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
+	err := os.WriteFile(path, []byte("not json"), 0o644)
+	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
 	wantErr := errors.New("invalid import JSON")
 	fake := &fakeImportSource{err: wantErr}
-	_, err := ImportFromPath(fake, path)
+	_, err = ImportFromPath(fake, path)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected wrapped %v, got %v", wantErr, err)
 	}
@@ -113,7 +115,8 @@ func TestExportToPathWritesWithOwnerOnlyPermissions(t *testing.T) {
 	path := filepath.Join(dir, "export.json")
 
 	fake := &fakeExportSource{data: []byte(`{"profiles":[]}`)}
-	if err := ExportToPath(fake, path, nil); err != nil {
+	err := ExportToPath(fake, path, nil)
+	if err != nil {
 		t.Fatalf("ExportToPath returned error: %v", err)
 	}
 

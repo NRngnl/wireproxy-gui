@@ -294,7 +294,8 @@ func TestRepositorySaveIsAtomicOnWriteFailure(t *testing.T) {
 	repository := NewRepository(storePath)
 
 	sentinelProfiles := []profile.Profile{profile.New("sentinel", sampleWG, 1080)}
-	if err := repository.Save(sentinelProfiles); err != nil {
+	err := repository.Save(sentinelProfiles)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -305,7 +306,8 @@ func TestRepositorySaveIsAtomicOnWriteFailure(t *testing.T) {
 
 	// Revoke write permission on the directory so os.CreateTemp fails
 	// before any temp file (and therefore no rename) can happen.
-	if err := os.Chmod(dir, 0o500); err != nil {
+	err = os.Chmod(dir, 0o500)
+	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -319,7 +321,8 @@ func TestRepositorySaveIsAtomicOnWriteFailure(t *testing.T) {
 	}
 
 	// Restore permissions before inspecting the directory contents.
-	if err := os.Chmod(dir, 0o700); err != nil {
+	err = os.Chmod(dir, 0o700)
+	if err != nil {
 		t.Fatal(err)
 	}
 

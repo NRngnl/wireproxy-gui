@@ -49,7 +49,8 @@ func main() {
 }
 
 func runDaemon(storePath string, logger *slog.Logger) {
-	if err := os.MkdirAll(filepath.Dir(storePath), 0o700); err != nil {
+	err := os.MkdirAll(filepath.Dir(storePath), 0o700)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "wireproxy-daemon: failed to create profile store directory for %q: %v\n", storePath, err)
 		os.Exit(1)
 	}
@@ -74,7 +75,8 @@ func runDaemon(storePath string, logger *slog.Logger) {
 	// context and does not install its own signal handlers.
 	ctx := context.Background()
 
-	if err := daemon.Run(ctx, core, loadErr, logger, daemon.Options{}); err != nil {
+	err = daemon.Run(ctx, core, loadErr, logger, daemon.Options{})
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "wireproxy-daemon: %v\n", err)
 		os.Exit(1)
 	}

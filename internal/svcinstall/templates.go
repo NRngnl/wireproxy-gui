@@ -52,7 +52,8 @@ func render(name string, in RenderInput) ([]byte, error) {
 			break
 		}
 	}
-	if err := tmpl.ExecuteTemplate(&buf, base, in); err != nil {
+	err = tmpl.ExecuteTemplate(&buf, base, in)
+	if err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

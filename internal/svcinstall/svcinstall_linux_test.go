@@ -106,13 +106,14 @@ func TestInstallCallsDaemonReloadBeforeEnable(t *testing.T) {
 	fr.install(t)
 
 	daemonPath := filepath.Join(t.TempDir(), "wireproxy-daemon")
-	if err := os.WriteFile(daemonPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+	err := os.WriteFile(daemonPath, []byte("#!/bin/sh\n"), 0o755)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	installer := linuxInstaller{}
 	storePath := filepath.Join(t.TempDir(), "profiles.json")
-	err := installer.Install(context.Background(), Options{
+	err = installer.Install(context.Background(), Options{
 		StorePath:        storePath,
 		DaemonBinaryPath: daemonPath,
 	})
@@ -131,7 +132,8 @@ func TestInstallCallsDaemonReloadBeforeEnable(t *testing.T) {
 	}
 
 	wantPath := filepath.Join(home, ".config", "systemd", "user", unitFileName)
-	if _, err := os.Stat(wantPath); err != nil {
+	_, err = os.Stat(wantPath)
+	if err != nil {
 		t.Fatalf("expected unit file at %q: %v", wantPath, err)
 	}
 }
@@ -200,11 +202,13 @@ func TestStatusMapsEnabledActive(t *testing.T) {
 	fr.install(t)
 
 	dir := filepath.Join(home, ".config", "systemd", "user")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	err := os.MkdirAll(dir, 0o755)
+	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, unitFileName)
-	if err := os.WriteFile(path, []byte("[Unit]\n"), 0o644); err != nil {
+	err = os.WriteFile(path, []byte("[Unit]\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -226,11 +230,13 @@ func TestStatusMapsDisabledInactive(t *testing.T) {
 	fr.install(t)
 
 	dir := filepath.Join(home, ".config", "systemd", "user")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	err := os.MkdirAll(dir, 0o755)
+	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, unitFileName)
-	if err := os.WriteFile(path, []byte("[Unit]\n"), 0o644); err != nil {
+	err = os.WriteFile(path, []byte("[Unit]\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -257,16 +263,18 @@ func TestStatusSystemctlNotFoundIsError(t *testing.T) {
 	fr.install(t)
 
 	dir := filepath.Join(home, ".config", "systemd", "user")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	err := os.MkdirAll(dir, 0o755)
+	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, unitFileName)
-	if err := os.WriteFile(path, []byte("[Unit]\n"), 0o644); err != nil {
+	err = os.WriteFile(path, []byte("[Unit]\n"), 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	installer := linuxInstaller{}
-	_, err := installer.Status(context.Background())
+	_, err = installer.Status(context.Background())
 	if err == nil {
 		t.Fatal("Status() error = nil, want a real invocation error when systemctl is not found")
 	}
@@ -285,7 +293,8 @@ func TestInstallReturnsErrLockHeldWithoutInvokingSystemctl(t *testing.T) {
 	t.Cleanup(func() { _ = heldLock.Release() })
 
 	daemonPath := filepath.Join(t.TempDir(), "wireproxy-daemon")
-	if err := os.WriteFile(daemonPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+	err = os.WriteFile(daemonPath, []byte("#!/bin/sh\n"), 0o755)
+	if err != nil {
 		t.Fatal(err)
 	}
 

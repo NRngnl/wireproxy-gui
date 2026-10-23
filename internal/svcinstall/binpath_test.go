@@ -192,11 +192,13 @@ func TestResolveDaemonBinaryPath_SymlinkResolution(t *testing.T) {
 	name := daemonBinaryName()
 
 	realDir := filepath.Join(dir, "real")
-	if err := os.Mkdir(realDir, 0o755); err != nil {
+	err := os.Mkdir(realDir, 0o755)
+	if err != nil {
 		t.Fatalf("Mkdir: %v", err)
 	}
 	realDaemon := filepath.Join(realDir, name)
-	if err := os.WriteFile(realDaemon, []byte("fake daemon binary"), 0o755); err != nil {
+	err = os.WriteFile(realDaemon, []byte("fake daemon binary"), 0o755)
+	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -204,15 +206,18 @@ func TestResolveDaemonBinaryPath_SymlinkResolution(t *testing.T) {
 	// live; the symlink named wireproxy-daemon points at the real
 	// binary in a different directory.
 	binDir := filepath.Join(dir, "bin")
-	if err := os.Mkdir(binDir, 0o755); err != nil {
+	err = os.Mkdir(binDir, 0o755)
+	if err != nil {
 		t.Fatalf("Mkdir: %v", err)
 	}
 	selfPath := filepath.Join(binDir, "wireproxy-gui")
-	if err := os.WriteFile(selfPath, []byte("fake self binary"), 0o755); err != nil {
+	err = os.WriteFile(selfPath, []byte("fake self binary"), 0o755)
+	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	siblingSymlink := filepath.Join(binDir, name)
-	if err := os.Symlink(realDaemon, siblingSymlink); err != nil {
+	err = os.Symlink(realDaemon, siblingSymlink)
+	if err != nil {
 		t.Fatalf("Symlink: %v", err)
 	}
 
@@ -247,11 +252,13 @@ func TestResolveDaemonBinaryPath_SymlinkResolution_Override(t *testing.T) {
 	dir := t.TempDir()
 
 	realFile := filepath.Join(dir, "real-wireproxy-daemon")
-	if err := os.WriteFile(realFile, []byte("fake daemon binary"), 0o755); err != nil {
+	err := os.WriteFile(realFile, []byte("fake daemon binary"), 0o755)
+	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	symlinkPath := filepath.Join(dir, "wireproxy-daemon-link")
-	if err := os.Symlink(realFile, symlinkPath); err != nil {
+	err = os.Symlink(realFile, symlinkPath)
+	if err != nil {
 		t.Fatalf("Symlink: %v", err)
 	}
 

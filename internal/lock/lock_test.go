@@ -81,7 +81,8 @@ func TestProbeReflectsLockState(t *testing.T) {
 		t.Fatal("Probe() = false while lock is held")
 	}
 
-	if err := l.Release(); err != nil {
+	err = l.Release()
+	if err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
 
@@ -101,7 +102,8 @@ func TestTryLockSucceedsAgainAfterRelease(t *testing.T) {
 	if err != nil || !ok || first == nil {
 		t.Fatalf("first TryLock() failed: ok=%v err=%v", ok, err)
 	}
-	if err := first.Release(); err != nil {
+	err = first.Release()
+	if err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
 
@@ -112,7 +114,8 @@ func TestTryLockSucceedsAgainAfterRelease(t *testing.T) {
 	if !ok || second == nil {
 		t.Fatal("second TryLock() did not succeed after first lock was released")
 	}
-	if err := second.Release(); err != nil {
+	err = second.Release()
+	if err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
 }
