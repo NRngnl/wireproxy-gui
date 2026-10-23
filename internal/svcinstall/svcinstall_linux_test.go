@@ -94,7 +94,8 @@ func setHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if got, err := os.UserHomeDir(); err != nil || got != home {
+	got, err := os.UserHomeDir()
+	if err != nil || got != home {
 		t.Skipf("os.UserHomeDir() does not respect $HOME on this platform (got %q, err %v); skipping", got, err)
 	}
 	return home
@@ -189,7 +190,8 @@ func TestUninstallInstalledStopsDisablesRemovesReloads(t *testing.T) {
 		}
 	}
 
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+	_, err = os.Stat(path)
+	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected unit file to be removed, stat err = %v", err)
 	}
 }

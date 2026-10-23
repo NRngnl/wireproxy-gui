@@ -64,7 +64,8 @@ func run(args []string) int {
 		storePath = defaultPath
 	}
 
-	if held, err := lock.Probe(storePath + ".lock"); err == nil && held {
+	held, probeErr := lock.Probe(storePath + ".lock")
+	if probeErr == nil && held {
 		fmt.Fprintln(os.Stderr, "wireproxy-tui: a wireproxy-gui daemon appears to be managing this profile store; changes made here may be overwritten until the daemon is stopped")
 	}
 

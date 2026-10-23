@@ -66,7 +66,8 @@ func (linuxInstaller) Status(ctx context.Context) (Status, error) {
 	}
 
 	status := Status{}
-	if _, statErr := os.Stat(path); statErr == nil {
+	_, statErr := os.Stat(path)
+	if statErr == nil {
 		status.Installed = true
 		status.UnitPath = path
 	} else if !errors.Is(statErr, os.ErrNotExist) {
@@ -191,7 +192,8 @@ func (linuxInstaller) Uninstall(ctx context.Context) error {
 		return err
 	}
 
-	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+	_, statErr := os.Stat(path)
+	if errors.Is(statErr, os.ErrNotExist) {
 		return nil
 	} else if statErr != nil {
 		return statErr
@@ -206,7 +208,8 @@ func (linuxInstaller) Uninstall(ctx context.Context) error {
 		return err
 	}
 
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	err = os.Remove(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("svcinstall: removing unit file %q: %w", path, err)
 	}
 
