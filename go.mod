@@ -10,12 +10,12 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/muesli/termenv v0.16.0
 	github.com/ncruces/zenity v0.10.15
-	github.com/things-go/go-socks5 v0.1.3
+	github.com/things-go/go-socks5 v0.1.4
 	github.com/windtf/wireproxy v1.1.3
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
-	tailscale.com v1.104.2
+	tailscale.com v1.104.4
 )
 
 require (
