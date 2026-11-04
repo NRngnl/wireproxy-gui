@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "last-release-sha": "9cb691bdb2412f4b522573a6c767c820183f3a94",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "wireproxy-gui",
+      "include-v-in-tag": true,
+      "version-file": "VERSION"
+    }
+  }
+}

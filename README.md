@@ -81,7 +81,11 @@ it on macOS, copy the `.app` bundle into `/Applications` or run it in place.
 
 ## Release Builds
 
-The project version is stored in [VERSION](VERSION). Release builds inject the
+The project version is stored in [VERSION](VERSION) and is managed by
+[release-please](https://github.com/googleapis/release-please): merging
+Conventional Commits to `main` updates a release PR that bumps `VERSION` and
+`CHANGELOG.md`. Merging that PR creates the tag and release after approval in the
+`release` environment (owner only), using the `RELEASE_TOKEN` environment secret, and the tag push builds artifacts. Release builds inject the
 version, commit, and UTC build time into the binary.
 
 Build a release artifact for the native OS and architecture:

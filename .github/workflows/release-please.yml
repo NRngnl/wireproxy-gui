@@ -1,0 +1,31 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-pr:
+    name: Update release PR
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          skip-github-release: true
+
+  # Creating the tag needs owner approval (`release` environment) and an owner token:
+  # the tag ruleset only lets admins create release tags. The tag push then runs release.yml.
+  publish:
+    name: Publish release
+    if: "startsWith(github.event.head_commit.message, 'chore(main): release')"
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+          skip-github-pull-request: true
