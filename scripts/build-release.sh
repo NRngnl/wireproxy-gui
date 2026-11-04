@@ -106,6 +106,16 @@ if [[ "$target_os" == "darwin" ]]; then
 	mkdir -p "${app_dir}/Contents/MacOS" "${app_dir}/Contents/Resources"
 	mv "${package_dir}/${executable}" "${app_dir}/Contents/MacOS/${binary_name}"
 	chmod +x "${app_dir}/Contents/MacOS/${binary_name}"
+	if command -v iconutil >/dev/null 2>&1 && command -v sips >/dev/null 2>&1; then
+		iconset="${package_dir}/icon.iconset"
+		mkdir -p "$iconset"
+		for size in 16 32 128 256; do
+			sips -z "$size" "$size" cmd/wireproxy-gui/Icon.png --out "${iconset}/icon_${size}x${size}.png" >/dev/null
+			sips -z $((size * 2)) $((size * 2)) cmd/wireproxy-gui/Icon.png --out "${iconset}/icon_${size}x${size}@2x.png" >/dev/null
+		done
+		iconutil -c icns "$iconset" -o "${app_dir}/Contents/Resources/icon.icns"
+		rm -rf "$iconset"
+	fi
 	cat > "${app_dir}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -117,6 +127,8 @@ if [[ "$target_os" == "darwin" ]]; then
 	<string>${app_name}</string>
 	<key>CFBundleExecutable</key>
 	<string>${binary_name}</string>
+	<key>CFBundleIconFile</key>
+	<string>icon</string>
 	<key>CFBundleIdentifier</key>
 	<string>${bundle_id}</string>
 	<key>CFBundleInfoDictionaryVersion</key>

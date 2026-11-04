@@ -1,3 +1,5 @@
+<p align="center"><img src="cmd/wireproxy-gui/Icon.png" width="128" alt="Wireproxy GUI icon"></p>
+
 # Wireproxy GUI
 
 Wireproxy GUI is a small Go/Fyne desktop app for running WireGuard- or
