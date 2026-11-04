@@ -119,7 +119,7 @@ jobs:
       - name: Build release artifact
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '0.0.0-ci' }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '0.0.0' }}
           TARGET_OS: ${{ matrix.goos }}
           TARGET_ARCH: ${{ matrix.goarch }}
           ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
@@ -236,7 +236,7 @@ jobs:
 
       - name: Build release artifact
         env:
-          RELEASE_VERSION: ${{ github.event_name == 'push' && github.ref_name || '0.0.0-ci' }}
+          RELEASE_VERSION: ${{ github.event_name == 'push' && github.ref_name || '0.0.0' }}
           GOTOOLCHAIN: auto
         run: scripts/build-release.sh
 
@@ -303,7 +303,7 @@ jobs:
 
       - name: Build release artifact
         env:
-          RELEASE_VERSION: ${{ github.event_name == 'push' && github.ref_name || '0.0.0-ci' }}
+          RELEASE_VERSION: ${{ github.event_name == 'push' && github.ref_name || '0.0.0' }}
           GOTOOLCHAIN: auto
         run: scripts/build-release.sh
 
