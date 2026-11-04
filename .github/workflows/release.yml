@@ -28,13 +28,8 @@ jobs:
           check-latest: true
           cache-dependency-path: go.sum
 
-      - name: Install Linux GUI build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc libgl1-mesa-dev pkg-config xorg-dev
-
       - name: Run tests
-        run: go test -count=1 ./...
+        run: go test -tags=ci -count=1 ./...
 
   prepare-release:
     name: Prepare draft release
