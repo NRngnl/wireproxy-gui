@@ -30,6 +30,14 @@ as `127.0.0.1:1080`.
 - Hide to tray on window close when tray support is available.
 - Stop active profiles during app shutdown and wait briefly for listeners to close.
 
+## Install (macOS)
+
+```sh
+brew install --cask NRngnl/tap/wireproxy-gui
+```
+
+The [tap](https://github.com/NRngnl/homebrew-tap) tracks the latest GitHub release.
+
 ## Requirements
 
 - Go 1.27.3.
