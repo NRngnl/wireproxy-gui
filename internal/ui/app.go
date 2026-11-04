@@ -188,6 +188,15 @@ func Run(core Application, loadErr error) {
 	gui.startAutoProfiles()
 	gui.installTray()
 	defer gui.shutdown()
+	// Release smoke test: start the real GUI, then quit once the window is up.
+	if os.Getenv("WIREPROXY_GUI_SMOKE_TEST") == "1" {
+		fyneApp.Lifecycle().SetOnStarted(func() {
+			go func() {
+				time.Sleep(2 * time.Second)
+				fyne.Do(fyneApp.Quit)
+			}()
+		})
+	}
 	gui.window.ShowAndRun()
 }
 
