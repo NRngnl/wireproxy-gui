@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/NRngnl/wireproxy-gui/compare/v0.3.2...v0.3.3) (2026-11-04)
+
+
+### Bug Fixes
+
+* **ui:** use a monochrome template tray icon on macOS so it follows the menu bar appearance ([#21](https://github.com/NRngnl/wireproxy-gui/issues/21)) ([19d0905](https://github.com/NRngnl/wireproxy-gui/commit/19d0905c02b1b9549eaca33e3bb9237b70845e41))
+
 ## [0.3.2](https://github.com/NRngnl/wireproxy-gui/compare/v0.3.1...v0.3.2) (2026-11-04)
 
 
