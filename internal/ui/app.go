@@ -164,6 +164,7 @@ func (e displayError) Error() string {
 
 func Run(core Application, loadErr error) {
 	fyneApp := app.NewWithID("com.github.nrngnl.wireproxy-gui")
+	fyneApp.SetIcon(appIcon)
 	applyAppTheme(fyneApp)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -740,7 +741,30 @@ func (g *GUI) installTray() {
 		g.window.SetCloseIntercept(func() {
 			g.window.Hide()
 		})
+		if dockIconSupported && g.hideDockIcon() {
+			g.app.Lifecycle().SetOnStarted(func() { setDockIconVisible(false) })
+		}
 	}
+}
+
+const hideDockIconPref = "hideDockIcon"
+
+func (g *GUI) hideDockIcon() bool {
+	return g.app.Preferences().Bool(hideDockIconPref)
+}
+
+// hideDockIconMenuItem toggles whether the macOS Dock icon is shown while the tray icon exists.
+func (g *GUI) hideDockIconMenuItem() *fyne.MenuItem {
+	item := fyne.NewMenuItem(tr("Hide Dock Icon"), func() {
+		runOnUI(func() {
+			hide := !g.hideDockIcon()
+			g.app.Preferences().SetBool(hideDockIconPref, hide)
+			setDockIconVisible(!hide)
+			g.refreshTrayMenu()
+		})
+	})
+	item.Checked = g.hideDockIcon()
+	return item
 }
 
 func (g *GUI) setupTray() bool {
@@ -750,7 +774,7 @@ func (g *GUI) setupTray() bool {
 	}
 
 	g.tray = desk
-	desk.SetSystemTrayIcon(theme.ComputerIcon())
+	desk.SetSystemTrayIcon(appIcon)
 	desk.SetSystemTrayMenu(g.trayMenu())
 	return true
 }
@@ -939,6 +963,11 @@ func (g *GUI) trayMenu() *fyne.Menu {
 		}),
 		fyne.NewMenuItemSeparator(),
 		g.serviceInstallMenuItem(),
+	)
+	if dockIconSupported {
+		items = append(items, g.hideDockIconMenuItem())
+	}
+	items = append(items,
 		fyne.NewMenuItemSeparator(),
 		g.trayQuitMenuItem(),
 	)
