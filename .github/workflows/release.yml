@@ -79,16 +79,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: linux-amd64
-            goos: linux
-            goarch: amd64
-            artifact_arch: amd64
-            fyne_name: wireproxy-gui
-          - target: linux-aarch64
-            goos: linux
-            goarch: arm64
-            artifact_arch: aarch64
-            fyne_name: wireproxy-gui
           - target: windows-amd64
             goos: windows
             goarch: amd64
@@ -317,15 +307,21 @@ jobs:
           GOTOOLCHAIN: auto
         run: scripts/build-release.sh
 
-      - name: Smoke test (launch app bundle)
+      # Hosted macOS runners have no GPU, so OpenGL windows cannot open there. Check the
+      # bundle is complete, native for this arch, and its executable loads all its libraries.
+      - name: Smoke test (verify app bundle)
         run: |
           dir=$(mktemp -d)
           ditto -x -k dist/release/artifacts/*.app.zip "$dir"
-          HOME="$dir" WIREPROXY_GUI_SMOKE_TEST=1 "$dir/Wireproxy GUI.app/Contents/MacOS/wireproxy-gui" &
-          pid=$!
-          for _ in $(seq 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-          if kill -0 "$pid" 2>/dev/null; then kill "$pid"; echo "GUI did not exit within 60s"; exit 1; fi
-          wait "$pid"
+          app="$dir/Wireproxy GUI.app"
+          plutil -lint "$app/Contents/Info.plist"
+          test -f "$app/Contents/Resources/icon.icns"
+          lipo -archs "$app/Contents/MacOS/wireproxy-gui" | grep -qw "$(uname -m)"
+          codesign --verify --verbose "$app"
+          # Only OS libraries may be linked; anything else would be missing on users' Macs.
+          if otool -L "$app/Contents/MacOS/wireproxy-gui" | tail -n +2 | awk '{print $1}' | grep -vE '^(/System/|/usr/lib/)'; then
+            echo "non-system dependency found"; exit 1
+          fi
 
       - name: Keep artifact for smoke test
         uses: actions/upload-artifact@v5
