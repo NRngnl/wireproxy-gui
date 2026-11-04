@@ -6,6 +6,7 @@
   "{{.Status}} · SOCKS5 {{.Address}}": "{{.Status}} · SOCKS5 {{.Address}}",
   "{{.Title}}: {{.Message}}": "{{.Title}}: {{.Message}}",
   "Add": "Add",
+  "Hide Dock Icon": "Hide Dock Icon",
   "Add Profile": "Add Profile",
   "Add a profile or import WireGuard configuration to begin.": "Add a profile or import WireGuard configuration to begin.",
   "Add a WireGuard or Tailscale profile, then choose a SOCKS5 host and port for that profile.": "Add a WireGuard or Tailscale profile, then choose a SOCKS5 host and port for that profile.",
