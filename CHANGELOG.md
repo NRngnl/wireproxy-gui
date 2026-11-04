@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/NRngnl/wireproxy-gui/compare/v0.3.1...v0.3.2) (2026-11-04)
+
+
+### Bug Fixes
+
+* **release:** build Linux natively and smoke-test every release artifact ([#19](https://github.com/NRngnl/wireproxy-gui/issues/19)) ([59996c7](https://github.com/NRngnl/wireproxy-gui/commit/59996c7b329e040ac45da930186d8d7ceecb9821))
+
 ## [0.3.1](https://github.com/NRngnl/wireproxy-gui/compare/v0.3.0...v0.3.1) (2026-11-04)
 
 
