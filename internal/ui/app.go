@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -783,7 +784,11 @@ func (g *GUI) setupTray() bool {
 	}
 
 	g.tray = desk
-	desk.SetSystemTrayIcon(appIcon)
+	if runtime.GOOS == "darwin" {
+		desk.SetSystemTrayIcon(macTrayIcon)
+	} else {
+		desk.SetSystemTrayIcon(appIcon)
+	}
 	desk.SetSystemTrayMenu(g.trayMenu())
 	return true
 }

@@ -1,0 +1,10 @@
+success Test
+success Build linux-aarch64
+success Build windows-amd64
+success Build windows-aarch64
+success Build macos-aarch64
+success Build linux-amd64
+success Build macos-x86_64
+skipped Prepare draft release
+failure Smoke test windows-amd64
+skipped Publish GitHub release

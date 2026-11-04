@@ -1,0 +1,28 @@
+{
+  "id": "b37165a6b",
+  "name": "Watch release dry-run",
+  "command": "cd /home/anthony/DevProjects/wireproxy-gui && gh run watch 41793000789 --exit-status >/dev/null 2>&1; gh run view 41793000789 --json jobs -q '.jobs[]|\"\\(.conclusion) \\(.name)\"'",
+  "status": "completed",
+  "outputPath": ".pi/tasks/01a1a4ce-4632-76d6-90cf-9ff7c279e6e2-1359615/b37165a6b.output",
+  "cwd": "/home/anthony/DevProjects/wireproxy-gui",
+  "startTime": 1793777586801,
+  "endTime": 1793777890899,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 1610680,
+  "bytesWritten": 328,
+  "isAgent": false,
+  "surviveReload": false,
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 2400,
+  "shellPolicy": {
+    "policy": "inherit",
+    "executable": "/usr/bin/zsh",
+    "argvPrefix": [
+      "-c"
+    ],
+    "dialect": "posix"
+  }
+}
