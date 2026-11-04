@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/NRngnl/wireproxy-gui/compare/v0.3.0...v0.3.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **release:** run release tests with the ci tag like CI ([#17](https://github.com/NRngnl/wireproxy-gui/issues/17)) ([8c355d8](https://github.com/NRngnl/wireproxy-gui/commit/8c355d8352de826993c0b04142cdd62b627a1c4d))
+
 ## [0.3.0](https://github.com/NRngnl/wireproxy-gui/compare/v0.2.4...v0.3.0) (2026-11-04)
 
 
