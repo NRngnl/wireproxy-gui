@@ -38,18 +38,19 @@ func (w *workbench) form(c *ui.Context, tk *theme.Tokens, locked bool) {
 	})
 }
 
-func (w *workbench) actions(c *ui.Context) {
+func (w *workbench) actions(c *ui.Context, tk *theme.Tokens) {
 	sz := w.size()
-	ui.Row(c).Gap(8).Wrap().Children(func() {
-		if action.Button(c.Key("save"), tr("Save"), action.ButtonProps{Size: sz}).Clicked() {
+	ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+		if action.Button(c.Key("save"), tr("Save"), action.ButtonProps{Variant: action.Primary, Size: sz}).Clicked() {
 			w.save()
-		}
-		if action.Button(c.Key("delete"), tr("Delete"), action.ButtonProps{Size: sz}).Clicked() {
-			w.confirmDel = true
 		}
 		if action.Button(c.Key("export"), tr("Export"), action.ButtonProps{Size: sz}).Clicked() {
 			p := w.frame.Selected.Profile
 			w.export([]profile.Profile{p}, safeFileName(p.Name)+".json")
+		}
+		ui.Box(c).Width(24)
+		if action.Button(c.Key("delete"), tr("Delete"), action.ButtonProps{Variant: action.Text, Size: sz}).TextColor(tk.Error).Clicked() {
+			w.confirmDel = true
 		}
 	})
 	if feedback.Modal(c, &w.confirmDel, feedback.ModalProps{Title: tr("Delete profile"), OkText: tr("Delete"), CancelText: tr("Cancel"), Width: 360}, func() {

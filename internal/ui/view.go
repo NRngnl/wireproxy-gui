@@ -136,9 +136,11 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 	sel := w.frame.Selected
 	ui.Column(c).Grow(1).Basis(0).MinWidth(0).Padding(narrow2(narrow, 14, 24)).Gap(14).Background(tk.BgContainer).Children(func() {
 		if narrow {
-			if action.Button(c.Key("rail"), tr("Profiles"), action.ButtonProps{Size: w.size()}).Clicked() {
-				w.railOpen = true
-			}
+			ui.Row(c).Children(func() {
+				if action.Button(c.Key("rail"), "← "+tr("Profiles"), action.ButtonProps{Variant: action.Link, Size: w.size()}).Clicked() {
+					w.railOpen = true
+				}
+			})
 		}
 		if w.notice != "" && !w.noticeShut {
 			feedback.Alert(c, w.notice, feedback.AlertProps{Type: feedback.Error, Closed: &w.noticeShut})
@@ -155,7 +157,7 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 		w.profileHeader(c, tk, sel)
 		w.facts(c, tk, sel)
 		w.form(c, tk, sel.Locked)
-		w.actions(c)
+		w.actions(c, tk)
 		w.activity(c, tk, sel)
 	})
 }
@@ -176,7 +178,7 @@ func (w *workbench) profileHeader(c *ui.Context, tk *theme.Tokens, sel *selected
 	ui.Row(c).Gap(8).Wrap().Children(func() {
 		id := sel.Profile.ID
 		if sel.Locked {
-			if action.Button(c.Key("disconnect"), tr("Disconnect"), action.ButtonProps{Size: w.size()}).Clicked() {
+			if action.Button(c.Key("disconnect"), tr("Disconnect"), action.ButtonProps{Variant: action.Primary, Size: w.size()}).Clicked() {
 				w.core.Disconnect(id)
 			}
 		} else if action.Button(c.Key("connect"), tr("Connect"), action.ButtonProps{Variant: action.Primary, Size: w.size()}).Clicked() {
