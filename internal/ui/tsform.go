@@ -39,8 +39,9 @@ func (w *workbench) tailscaleForm(c *ui.Context, tk *theme.Tokens, sel *selected
 	w.section(c, tk, "secexit", tr("Exit node"), tr("Route traffic through another device on your tailnet."), func() {
 		w.exitNodeRow(c, tk, sz, exitLocked)
 	})
-	w.section(c, tk, "secfwd", tr("Port forwards"), tr("Relays this node's tailnet IP at the listen port to a local network address."), func() {
+	w.section(c, tk, "secfwd", tr("Port forwards"), tr("Share a service with your tailnet. Other devices connect to this device's tailnet IP on the listen port, and the connection is relayed to the target."), func() {
 		w.forwards(c, tk, sz, locked)
+		ui.Text(c, tr("Example: TCP 8080 to 127.0.0.1:3000 lets tailnet devices open this device's tailnet IP on port 8080 to reach a local dev server. The target can be this computer or any address it can reach, such as 192.168.1.10:80. Only devices on your tailnet can connect, and forwards run only while the profile is connected.")).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 	})
 }
 
@@ -147,7 +148,7 @@ func (w *workbench) forwards(c *ui.Context, tk *theme.Tokens, sz theme.Size, loc
 			field.Input(c.Key("fwdport"), &w.fwdPort, field.InputProps{Size: sz, Placeholder: portHead}).MinWidth(0).Disabled(locked)
 		})
 		ui.Column(c).Grow(1).Basis(0).MinWidth(0).Children(func() {
-			field.Input(c.Key("fwdtarget"), &w.fwdTarget, field.InputProps{Size: sz, Placeholder: tr("Target address, e.g. 192.168.1.10:80")}).MinWidth(0).Disabled(locked)
+			field.Input(c.Key("fwdtarget"), &w.fwdTarget, field.InputProps{Size: sz, Placeholder: tr("Target host:port, e.g. 127.0.0.1:3000")}).MinWidth(0).Disabled(locked)
 		})
 		if action.ActionIcon(c.Key("fwdadd"), lucide.Plus(), action.ActionIconProps{Variant: action.ActionIconOutlined, Size: sz, Title: tr("Add")}).Disabled(locked).Clicked() {
 			w.addForward()
