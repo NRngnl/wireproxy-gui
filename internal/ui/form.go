@@ -19,7 +19,7 @@ func (w *workbench) form(c *ui.Context, tk *theme.Tokens, locked bool) {
 	sz := w.size()
 	ui.Column(c).Gap(10).MaxWidth(640).Children(func() {
 		w.label(c, tk, tr("Backend"))
-		action.Segmented(c.Key("kind"), &w.draft.Kind, []string{"WireGuard", "Tailscale"}, action.SegmentedProps{Size: theme.Small}).Disabled(locked)
+		action.Segmented(c.Key("kind"), &w.draft.Kind, []string{tr("WireGuard"), tr("Tailscale")}, action.SegmentedProps{Size: theme.Small}).Disabled(locked)
 		w.label(c, tk, tr("Name"))
 		field.Input(c.Key("name"), &w.draft.Name, field.InputProps{Size: sz})
 		ui.Row(c).Gap(10).Wrap().Children(func() {
@@ -32,7 +32,8 @@ func (w *workbench) form(c *ui.Context, tk *theme.Tokens, locked bool) {
 				field.Input(c.Key("port"), &w.draft.Port, field.InputProps{Size: sz}).Disabled(locked)
 			})
 		})
-		choice.Checkbox(c.Key("auto"), &w.draft.AutoStart, tr("Start automatically"), choice.CheckboxProps{})
+		w.label(c, tk, tr("Startup"))
+		choice.Checkbox(c.Key("auto"), &w.draft.AutoStart, tr("Connect when app opens"), choice.CheckboxProps{})
 		if w.draft.Kind == 1 {
 			w.tailscaleForm(c, tk, w.frame.Selected)
 			return
