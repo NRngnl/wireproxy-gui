@@ -4,10 +4,9 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"text/template"
-
-	"fyne.io/fyne/v2"
 
 	"github.com/NRngnl/wireproxy-gui/internal/application"
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
@@ -27,12 +26,12 @@ var (
 func init() {
 	data, err := appTranslations.ReadFile("translations/en.json")
 	if err != nil {
-		fyne.LogError("Error loading app translations", err)
+		slog.Error("Error loading app translations", "error", err)
 		return
 	}
 	err = json.Unmarshal(data, &englishCatalog)
 	if err != nil {
-		fyne.LogError("Error parsing app translations", err)
+		slog.Error("Error parsing app translations", "error", err)
 	}
 }
 
@@ -50,7 +49,7 @@ func translateEnglishCatalog(message string, data ...any) string {
 	}
 	rendered, err := renderTranslation(message, text, data[0])
 	if err != nil {
-		fyne.LogError("Error rendering app translation", err)
+		slog.Error("Error rendering app translation", "error", err)
 		return text
 	}
 	return rendered

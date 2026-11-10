@@ -8,6 +8,8 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/egoist/mygo v0.8.4-0.20261108082913-9233663736ca
+	github.com/lobehub/lobe-mygo v0.0.0-20261109101238-5b3ecde8b184
 	github.com/muesli/termenv v0.16.0
 	github.com/ncruces/zenity v0.10.15
 	github.com/things-go/go-socks5 v0.1.4
@@ -43,6 +45,7 @@ require (
 	github.com/dblohm7/wingoes v0.0.0-20260526185140-fb298caac7ca // indirect
 	github.com/dchest/jsmin v1.0.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
+	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.10.0 // indirect

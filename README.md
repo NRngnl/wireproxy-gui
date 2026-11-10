@@ -267,6 +267,7 @@ stop before process exit continues.
 
 ```text
 cmd/wireproxy-gui/      Composition root and executable entry point
+cmd/wireproxy-ui-preview/ Development-only js/wasm preview with synthetic fixtures
 internal/profile/       Profile domain model, invariants, and policies
 internal/connection/    Connection-domain events and values
 internal/application/   Use cases and repository/runtime ports

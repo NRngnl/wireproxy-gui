@@ -1,3 +1,5 @@
+//go:build !js
+
 package ui
 
 import (
@@ -5,8 +7,6 @@ import (
 
 	"github.com/ncruces/zenity"
 )
-
-var errNativeFileDialogUnavailable = errors.New("native file picker is unavailable; install zenity, matedialog, or qarma on Unix-like systems")
 
 type nativeProfileFileDialog struct{}
 
