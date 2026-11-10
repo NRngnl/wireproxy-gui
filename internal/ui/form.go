@@ -70,7 +70,7 @@ func (w *workbench) form(c *ui.Context, tk *theme.Tokens, locked bool) {
 
 func (w *workbench) actions(c *ui.Context, tk *theme.Tokens, pad float32) {
 	sz := w.size()
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Padding(12, pad).Background(tk.BgContainer).
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Padding(12, max(pad, w.paneWidth()-contentWidth-pad), 12, pad).Background(tk.BgContainer).
 		BorderWidth(1, 0, 0, 0).BorderColor(tk.BorderSecondary).Children(func() {
 		if action.Button(c.Key("save"), tr("Save"), action.ButtonProps{Variant: action.Primary, Size: sz}).Clicked() {
 			w.save()
@@ -90,4 +90,11 @@ func (w *workbench) actions(c *ui.Context, tk *theme.Tokens, pad float32) {
 		w.confirmDel = false
 		w.remove(w.frame.Selected.Profile.ID)
 	}
+}
+
+func (w *workbench) paneWidth() float32 {
+	if w.width < narrowBelow {
+		return w.width
+	}
+	return w.width - w.railWidth
 }

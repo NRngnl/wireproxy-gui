@@ -144,7 +144,7 @@ func (w *workbench) forwards(c *ui.Context, tk *theme.Tokens, sz theme.Size, loc
 			action.Segmented(c.Key("fwdproto"), &w.fwdProto, []string{"TCP", "UDP"}, action.SegmentedProps{Size: theme.Small})
 		})
 		ui.Column(c).Width(fwdPortW).Shrink(0).Children(func() {
-			field.Input(c.Key("fwdport"), &w.fwdPort, field.InputProps{Size: sz, Placeholder: tr("Port")}).MinWidth(0).Disabled(locked)
+			field.Input(c.Key("fwdport"), &w.fwdPort, field.InputProps{Size: sz, Placeholder: portHead}).MinWidth(0).Disabled(locked)
 		})
 		ui.Column(c).Grow(1).Basis(0).MinWidth(0).Children(func() {
 			field.Input(c.Key("fwdtarget"), &w.fwdTarget, field.InputProps{Size: sz, Placeholder: tr("Target address, e.g. 192.168.1.10:80")}).MinWidth(0).Disabled(locked)

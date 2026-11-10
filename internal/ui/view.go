@@ -65,7 +65,7 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 	sel := w.frame.Selected
 	pad := narrow2(narrow, 14, 24)
 	ui.Column(c).Grow(1).Basis(0).MinWidth(0).Background(tk.BgContainer).Children(func() {
-		head := ui.Column(c).Padding(pad, pad, 14, pad).Gap(10).Shrink(0)
+		head := ui.Column(c).Padding(pad, pad, 14, pad).Gap(10).Shrink(0).PaddingEnd(max(pad, w.paneWidth()-contentWidth-pad))
 		if sel != nil {
 			head.BorderWidth(0, 0, 1, 0).BorderColor(tk.BorderSecondary)
 		}
