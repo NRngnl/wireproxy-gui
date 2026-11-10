@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -106,19 +105,51 @@ func (w *workbench) exitPicker(c *ui.Context, sz theme.Size, locked bool) {
 }
 
 func (w *workbench) forwards(c *ui.Context, tk *theme.Tokens, sz theme.Size, locked bool) {
-	for i, f := range w.draft.Forwards {
-		ui.Row(c.Key("fwd" + strconv.Itoa(i))).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, fmt.Sprintf("%s %d → %s", strings.ToUpper(string(f.Protocol)), f.ListenPort, f.TargetAddr)).Grow(1).MinWidth(0).Font("monospace").FontSize(tk.FontSizeSM)
-			if action.Button(c.Key("rm"+strconv.Itoa(i)), tr("Remove"), action.ButtonProps{Variant: action.Text, Size: sz}).TextColor(tk.Error).Disabled(locked).Clicked() {
-				w.draft.Forwards = append(w.draft.Forwards[:i:i], w.draft.Forwards[i+1:]...)
+	fwdProtoW, fwdPortW, padX, mono, portHead := float32(96), float32(110), float32(12), tk.FontSize, tr("Listen port")
+	if w.width > 0 && w.width < narrowBelow {
+		fwdPortW, padX, mono, portHead = 64, 8, tk.FontSizeSM, tr("Port")
+	}
+	if len(w.draft.Forwards) > 0 {
+		ui.Column(c).Radius(tk.BorderRadius).Border(1, tk.BorderSecondary).Children(func() {
+			ui.Row(c).Gap(8).Padding(6, padX).Background(tk.FillQuaternary).Children(func() {
+				for _, h := range []struct {
+					text string
+					w    float32
+				}{{tr("Protocol"), fwdProtoW}, {portHead, fwdPortW}, {tr("Target"), 0}} {
+					t := ui.Text(c, h.text).FontSize(tk.FontSizeSM).FontWeight(500).TextColor(tk.TextSecondary)
+					if h.w > 0 {
+						t.Width(h.w).Shrink(0)
+					} else {
+						t.Grow(1)
+					}
+				}
+				ui.Box(c).Width(28)
+			})
+			for i, f := range w.draft.Forwards {
+				ui.Row(c.Key("fwd"+strconv.Itoa(i))).Gap(8).Padding(6, padX).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(tk.BorderSecondary).Children(func() {
+					ui.Row(c).Width(fwdProtoW).Shrink(0).Children(func() {
+						display.Tag(c, strings.ToUpper(string(f.Protocol)), display.TagProps{Color: display.TagInfo, Size: theme.Small})
+					})
+					ui.Text(c, strconv.Itoa(f.ListenPort)).Width(fwdPortW).Shrink(0).Font("monospace").FontSize(mono).TextColor(tk.Text)
+					ui.Text(c, f.TargetAddr).Grow(1).MinWidth(0).Font("monospace").FontSize(mono).TextColor(tk.Text).SingleLine().Ellipsis("…")
+					if action.ActionIcon(c.Key("rm"+strconv.Itoa(i)), lucide.Trash2(), action.ActionIconProps{Size: theme.Small, Danger: true, Title: tr("Remove")}).Disabled(locked).Clicked() {
+						w.draft.Forwards = append(w.draft.Forwards[:i:i], w.draft.Forwards[i+1:]...)
+					}
+				})
 			}
 		})
 	}
-	ui.Row(c).Gap(8).Wrap().Children(func() {
-		action.Segmented(c.Key("fwdproto"), &w.fwdProto, []string{"TCP", "UDP"}, action.SegmentedProps{Size: theme.Small})
-		field.Input(c.Key("fwdport"), &w.fwdPort, field.InputProps{Size: sz, Placeholder: tr("Listen port")}).Width(110).Disabled(locked)
-		field.Input(c.Key("fwdtarget"), &w.fwdTarget, field.InputProps{Size: sz, Placeholder: tr("Target address, e.g. 192.168.1.10:80")}).Grow(1).Basis(160).Disabled(locked)
-		if action.Button(c.Key("fwdadd"), tr("Add"), action.ButtonProps{Size: sz}).Disabled(locked).Clicked() {
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, padX).Children(func() {
+		ui.Row(c).Width(fwdProtoW).Shrink(0).Children(func() {
+			action.Segmented(c.Key("fwdproto"), &w.fwdProto, []string{"TCP", "UDP"}, action.SegmentedProps{Size: theme.Small})
+		})
+		ui.Column(c).Width(fwdPortW).Shrink(0).Children(func() {
+			field.Input(c.Key("fwdport"), &w.fwdPort, field.InputProps{Size: sz, Placeholder: tr("Port")}).MinWidth(0).Disabled(locked)
+		})
+		ui.Column(c).Grow(1).Basis(0).MinWidth(0).Children(func() {
+			field.Input(c.Key("fwdtarget"), &w.fwdTarget, field.InputProps{Size: sz, Placeholder: tr("Target address, e.g. 192.168.1.10:80")}).MinWidth(0).Disabled(locked)
+		})
+		if action.ActionIcon(c.Key("fwdadd"), lucide.Plus(), action.ActionIconProps{Variant: action.ActionIconOutlined, Size: sz, Title: tr("Add")}).Disabled(locked).Clicked() {
 			w.addForward()
 		}
 	})
