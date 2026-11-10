@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/application"
@@ -51,6 +52,13 @@ func newFixture(name string) *fixture {
 	return f
 }
 
+func (f *fixture) poke() {
+	select {
+	case f.changes <- application.Change{}:
+	default:
+	}
+}
+
 func (f *fixture) Changes() <-chan application.Change { return f.changes }
 func (f *fixture) Profiles() []profile.Profile        { return append([]profile.Profile(nil), f.profiles...) }
 func (f *fixture) Profile(id string) (profile.Profile, bool) {
@@ -72,20 +80,52 @@ func (f *fixture) RuntimeLocked(id string) bool {
 	s := f.Status(id)
 	return s == application.StatusRunning || s == application.StatusStarting || s == application.StatusStopping
 }
-func (*fixture) Add(string) (profile.Profile, error) { return profile.Profile{}, errPreview }
-func (*fixture) Save(profile.Profile) (application.SaveResult, error) {
-	return application.SaveResult{}, errPreview
+func (f *fixture) Add(name string) (profile.Profile, error) {
+	p := profile.New(name, previewConfig, 1090+len(f.profiles))
+	f.profiles = append(f.profiles, p)
+	f.poke()
+	return p, nil
 }
-func (*fixture) Delete(string) error                              { return errPreview }
+func (f *fixture) Save(p profile.Profile) (application.SaveResult, error) {
+	for i := range f.profiles {
+		if f.profiles[i].ID == p.ID {
+			f.profiles[i] = p
+		}
+	}
+	f.poke()
+	return application.SaveResult{Changed: true}, nil
+}
+func (f *fixture) Delete(id string) error {
+	f.profiles = slices.DeleteFunc(f.profiles, func(p profile.Profile) bool { return p.ID == id })
+	f.poke()
+	return nil
+}
 func (*fixture) Import(string, []byte) ([]profile.Profile, error) { return nil, errPreview }
 func (*fixture) Export([]string) ([]byte, error)                  { return nil, errPreview }
-func (*fixture) Connect(string) error                             { return errPreview }
-func (*fixture) Login(string) error                               { return errPreview }
-func (*fixture) ConnectAll() error                                { return errPreview }
-func (*fixture) AutoConnect() error                               { return nil }
-func (*fixture) Disconnect(string) bool                           { return false }
-func (*fixture) DisconnectFromTray(string) bool                   { return false }
-func (*fixture) DisconnectAll()                                   {}
+func (f *fixture) Connect(id string) error {
+	f.statuses[id] = application.StatusRunning
+	f.poke()
+	return nil
+}
+func (f *fixture) ConnectAll() error {
+	for _, p := range f.profiles {
+		f.statuses[p.ID] = application.StatusRunning
+	}
+	f.poke()
+	return nil
+}
+func (*fixture) Login(string) error { return errPreview }
+func (*fixture) AutoConnect() error { return nil }
+func (f *fixture) Disconnect(id string) bool {
+	delete(f.statuses, id)
+	f.poke()
+	return true
+}
+func (*fixture) DisconnectFromTray(string) bool { return false }
+func (f *fixture) DisconnectAll() {
+	clear(f.statuses)
+	f.poke()
+}
 func (*fixture) ExitNodes(context.Context, string) ([]connection.ExitNode, error) {
 	return nil, errPreview
 }

@@ -53,10 +53,17 @@ type workbench struct {
 	look       int
 	density    int
 	logScroll  ui.ScrollState
+	draft      draft
+	info       string
+	infoShut   bool
+	confirmDel bool
+	logID      string
+	logTail    map[string]bool
+	logY       map[string]float32
 }
 
 func newWorkbench(core Application, look appearance, compact, railOpen bool) *workbench {
-	w := &workbench{core: core, wake: make(chan struct{}, 1), look: int(look), railOpen: railOpen}
+	w := &workbench{core: core, wake: make(chan struct{}, 1), look: int(look), railOpen: railOpen, logTail: map[string]bool{}, logY: map[string]float32{}}
 	if compact {
 		w.density = 1
 	}

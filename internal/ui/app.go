@@ -1285,14 +1285,6 @@ func (g *GUI) exportProfiles(profiles []profile.Profile, fileName string) {
 	g.setFeedback(tr("Exported"), widget.SuccessImportance)
 }
 
-func exportProfilesToPath(data []byte, path string) error {
-	err := os.WriteFile(path, data, 0o600)
-	if err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o600)
-}
-
 func (g *GUI) saveSelected() {
 	err := g.saveSelectedProfile()
 	if err != nil {

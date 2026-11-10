@@ -66,7 +66,33 @@ func (w *workbench) rail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 				}
 			})
 		})
+		w.railActions(c)
 		w.appearanceControls(c)
+	})
+}
+
+func (w *workbench) railActions(c *ui.Context) {
+	sz := w.size()
+	ui.Row(c).Gap(6).Wrap().Children(func() {
+		if action.Button(c.Key("add"), tr("Add"), action.ButtonProps{Size: sz}).Clicked() {
+			w.add()
+		}
+		if action.Button(c.Key("import"), tr("Import"), action.ButtonProps{Size: sz}).Clicked() {
+			w.importFile()
+		}
+		if action.Button(c.Key("exportall"), tr("Export All"), action.ButtonProps{Size: sz}).Clicked() {
+			w.export(w.core.Profiles(), "wireproxy-profiles.json")
+		}
+		if action.Button(c.Key("connall"), tr("Connect All"), action.ButtonProps{Size: sz}).Clicked() {
+			go func() {
+				if w.persist("Connect All") {
+					w.report("Connect All", w.core.ConnectAll())
+				}
+			}()
+		}
+		if action.Button(c.Key("discall"), tr("Disconnect All"), action.ButtonProps{Size: sz}).Clicked() {
+			w.core.DisconnectAll()
+		}
 	})
 }
 
@@ -122,8 +148,14 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 				Description: tr("Add a WireGuard or Tailscale profile, then choose a SOCKS5 host and port for that profile.")})
 			return
 		}
+		w.syncDraft()
+		if w.info != "" && !w.infoShut {
+			feedback.Alert(c, w.info, feedback.AlertProps{Type: feedback.Success, Closed: &w.infoShut})
+		}
 		w.profileHeader(c, tk, sel)
 		w.facts(c, tk, sel)
+		w.form(c, tk, sel.Locked)
+		w.actions(c)
 		w.activity(c, tk, sel)
 	})
 }
@@ -148,7 +180,11 @@ func (w *workbench) profileHeader(c *ui.Context, tk *theme.Tokens, sel *selected
 				w.core.Disconnect(id)
 			}
 		} else if action.Button(c.Key("connect"), tr("Connect"), action.ButtonProps{Variant: action.Primary, Size: w.size()}).Clicked() {
-			go func() { w.report("Connect profile", w.core.Connect(id)) }()
+			go func() {
+				if w.persist("Connect profile") {
+					w.report("Connect profile", w.core.Connect(id))
+				}
+			}()
 		}
 	})
 }
@@ -162,7 +198,16 @@ func (w *workbench) facts(c *ui.Context, tk *theme.Tokens, sel *selectedProfile)
 
 func (w *workbench) activity(c *ui.Context, tk *theme.Tokens, sel *selectedProfile) {
 	ui.Text(c, tr("Activity")).FontWeight(600).TextColor(tk.Text)
-	if w.logScroll.MaxY-w.logScroll.Y < 4 {
+	id := sel.Profile.ID
+	if w.logID != "" {
+		w.logTail[w.logID] = w.logScroll.MaxY-w.logScroll.Y < 4
+		w.logY[w.logID] = w.logScroll.Y
+	}
+	if w.logID != id {
+		w.logID = id
+		w.logScroll.Y = w.logY[id]
+	}
+	if tail, seen := w.logTail[id]; !seen || tail {
 		w.logScroll.Y = math.MaxFloat32
 	}
 	panel := ui.Scroll(c).MaxHeight(280).Background(tk.BgLayout).Radius(tk.BorderRadiusLG).Padding(10).TrackScroll(&w.logScroll)
