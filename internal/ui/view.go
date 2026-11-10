@@ -31,6 +31,7 @@ func (w *workbench) view(c *ui.Context) {
 		if !narrow || !w.railOpen {
 			w.detail(c, tk, narrow)
 		}
+		w.usageGuide(c)
 	})
 }
 
@@ -72,12 +73,13 @@ func (w *workbench) rail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 func (w *workbench) railActions(c *ui.Context) {
 	sz := w.size()
 	ui.Row(c).Gap(6).Wrap().Children(func() {
-		if action.Button(c.Key("add"), tr("Add"), action.ButtonProps{Size: sz}).Clicked() {
-			w.add()
+		w.addImport(c, "")
+		if action.Button(c.Key("help"), tr("Help"), action.ButtonProps{Size: sz}).Clicked() {
+			w.helpOpen = true
 		}
-		if action.Button(c.Key("import"), tr("Import"), action.ButtonProps{Size: sz}).Clicked() {
-			w.importFile()
-		}
+	})
+	ui.Text(c, tr("All Profiles")).FontSize(theme.TokensOf(c).FontSizeSM).FontWeight(500).TextColor(theme.TokensOf(c).TextSecondary).Margin(6, 0, 0, 0)
+	ui.Row(c).Gap(6).Wrap().Children(func() {
 		if action.Button(c.Key("exportall"), tr("Export All"), action.ButtonProps{Size: sz}).Clicked() {
 			w.export(w.core.Profiles(), "wireproxy-profiles.json")
 		}
@@ -154,8 +156,9 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 					feedback.Alert(c, w.notice, feedback.AlertProps{Type: feedback.Error, Closed: &w.noticeShut})
 				}
 				if sel == nil {
-					display.Empty(c, display.EmptyProps{Icon: lucide.Inbox(), Title: tr("No profiles"),
-						Description: tr("Add a WireGuard or Tailscale profile, then choose a SOCKS5 host and port for that profile.")})
+					display.Empty(c, display.EmptyProps{Icon: lucide.Inbox(), Title: tr("No profiles yet"),
+						Description: tr("Add a profile or import WireGuard configuration to begin.")})
+					ui.Row(c).Justify(ui.Center).Gap(8).Children(func() { w.addImport(c, "empty") })
 					return
 				}
 				if w.info != "" && !w.infoShut {
@@ -186,7 +189,14 @@ func (w *workbench) profileHeader(c *ui.Context, tk *theme.Tokens, sel *selected
 	ui.Row(c).Gap(8).Wrap().Children(func() {
 		id := sel.Profile.ID
 		if sel.Locked {
-			if action.Button(c.Key("disconnect"), tr("Disconnect"), action.ButtonProps{Variant: action.Primary, Size: w.size()}).Clicked() {
+			label := tr("Disconnect")
+			switch sel.Status {
+			case application.StatusStarting:
+				label = tr("Cancel Connection")
+			case application.StatusStopping:
+				label = tr("Disconnecting…")
+			}
+			if action.Button(c.Key("disconnect"), label, action.ButtonProps{Variant: action.Primary, Size: w.size()}).Disabled(sel.Status == application.StatusStopping).Clicked() {
 				w.core.Disconnect(id)
 			}
 		} else if action.Button(c.Key("connect"), tr("Connect"), action.ButtonProps{Variant: action.Primary, Size: w.size()}).Clicked() {
@@ -229,5 +239,32 @@ func (w *workbench) activity(c *ui.Context, tk *theme.Tokens, sel *selectedProfi
 			return
 		}
 		ui.Text(c, text).Font("monospace").FontSize(tk.FontSizeSM).TextColor(tk.TextSecondary).Selectable()
+	})
+}
+
+func (w *workbench) addImport(c *ui.Context, key string) {
+	sz := w.size()
+	if action.Button(c.Key(key+"add"), tr("Add Profile"), action.ButtonProps{Variant: action.Primary, Size: sz}).Clicked() {
+		w.add()
+	}
+	if action.Button(c.Key(key+"import"), tr("Import"), action.ButtonProps{Size: sz}).Clicked() {
+		w.importFile()
+	}
+}
+
+func (w *workbench) usageGuide(c *ui.Context) {
+	feedback.Modal(c, &w.helpOpen, feedback.ModalProps{Title: tr("Usage guide"), Width: 720, NoFooter: true}, func() {
+		ui.Scroll(c).MaxHeight(440).Children(func() {
+			ui.Column(c).Gap(12).Children(func() {
+				for _, p := range usageGuideParagraphs {
+					ui.Text(c, tr(p)).Selectable()
+				}
+			})
+		})
+		ui.Row(c).Justify(ui.End).Margin(16, 0, 0, 0).Children(func() {
+			if action.Button(c.Key("helpclose"), tr("Close"), action.ButtonProps{Variant: action.Primary, Size: w.size()}).Clicked() {
+				w.helpOpen = false
+			}
+		})
 	})
 }
