@@ -22,7 +22,6 @@ fi
 
 target_os="${GOOS:-$(go env GOOS)}"
 target_arch="${GOARCH:-$(go env GOARCH)}"
-target_cc="${CC:-}"
 arch_label="$target_arch"
 if [[ "$arch_label" == "arm64" ]]; then
 	arch_label="aarch64"
@@ -57,13 +56,8 @@ if [[ "$target_os" == "windows" ]]; then
 fi
 
 echo "building ${package_name}"
-if [[ -n "$target_cc" ]]; then
-	GOOS="$target_os" GOARCH="$target_arch" CGO_ENABLED="${CGO_ENABLED:-1}" CC="$target_cc" \
-		go build -trimpath -ldflags "${ldflags[*]}" -o "${package_dir}/${executable}" ./cmd/wireproxy-gui
-else
-	GOOS="$target_os" GOARCH="$target_arch" CGO_ENABLED="${CGO_ENABLED:-1}" \
-		go build -trimpath -ldflags "${ldflags[*]}" -o "${package_dir}/${executable}" ./cmd/wireproxy-gui
-fi
+GOOS="$target_os" GOARCH="$target_arch" CGO_ENABLED=0 \
+	go build -trimpath -ldflags "${ldflags[*]}" -o "${package_dir}/${executable}" ./cmd/wireproxy-gui
 
 cp README.md LICENSE "$package_dir/"
 

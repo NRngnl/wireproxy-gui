@@ -2,7 +2,7 @@
 
 # Wireproxy GUI
 
-Wireproxy GUI is a small Go/Fyne desktop app for running WireGuard- or
+Wireproxy GUI is a small Go desktop app built on lobe-mygo, for running WireGuard- or
 Tailscale-backed SOCKS5 proxies from a native GUI and system tray. It manages
 multiple saved profiles, starts each connection in-process through the embedded
 WireGuard engine or an embedded Tailscale `tsnet` node, and does not shell out to
@@ -28,6 +28,9 @@ as `127.0.0.1:1080`.
 - Auto-connect selected profiles when the app opens.
 - Use native file dialogs for import and export.
 - Hide to tray on window close when tray support is available.
+- On macOS, optionally hide the Dock icon from the tray menu. The setting is kept
+  in `wireproxy-gui/gui.json` under the user config directory; a value saved by
+  earlier Fyne builds is migrated once.
 - Stop active profiles during app shutdown and wait briefly for listeners to close.
 
 ## Install (macOS)
@@ -41,13 +44,14 @@ The [tap](https://github.com/NRngnl/homebrew-tap) tracks the latest GitHub relea
 ## Requirements
 
 - Go 1.27.3.
-- macOS, Linux, or Windows with GUI support from Fyne.
+- macOS, Linux, or Windows. Builds are pure Go (`CGO_ENABLED=0`).
+- Linux runtime: GTK 3 for the window and file dialogs; the tray icon also needs
+  `libayatana-appindicator3` and `libdbusmenu`. Without them the app runs
+  without a tray, and closing the window quits.
 - `mise` is optional, but the repo includes `.mise.toml` for tool pinning.
 - No separate `wireproxy`, `tailscale`, or `tailscaled` binary is required.
 
-For native file dialogs, macOS and Windows work through the platform dialog
-support used by `github.com/ncruces/zenity`. On Unix-like desktops, install one
-of `zenity`, `matedialog`, or `qarma` if file pickers do not open.
+Import and export use the platform file dialog (GTK on Linux).
 
 ## Install Tools
 
@@ -104,7 +108,7 @@ Build a release artifact for the native OS and architecture:
 scripts/build-release.sh
 ```
 
-Build a specific target when the host has the required native/cross CGO toolchain:
+Cross-build any target from any host; no C toolchain is needed:
 
 ```sh
 RELEASE_VERSION=0.1.0 GOOS=darwin GOARCH=arm64 scripts/build-release.sh
@@ -121,14 +125,8 @@ The macOS release artifact is a zipped `.app` bundle. Linux releases are
 neighboring `.sha256` checksum file.
 
 GitHub Actions builds releases automatically when a version tag such as `0.1.0`
-or `v0.1.0` is pushed. The release workflow runs on Ubuntu only and uses
-`fyne-cross` containers to cross-compile Linux and Windows for amd64 and
-aarch64/arm64.
-
-macOS release artifacts are intentionally not built in CI. Build them locally on
-macOS with `scripts/build-release.sh`, or pass `GOOS=darwin GOARCH=arm64` or
-`GOOS=darwin GOARCH=amd64` when using a host with the required macOS CGO
-toolchain.
+or `v0.1.0` is pushed. The workflow cross-compiles Windows and builds Linux
+and macOS on their own runners, all with `CGO_ENABLED=0`.
 
 ## Test And Lint
 
@@ -267,11 +265,12 @@ stop before process exit continues.
 
 ```text
 cmd/wireproxy-gui/      Composition root and executable entry point
+cmd/wireproxy-ui-preview/ Development-only js/wasm preview with synthetic fixtures
 internal/profile/       Profile domain model, invariants, and policies
 internal/connection/    Connection-domain events and values
 internal/application/   Use cases and repository/runtime ports
 internal/profilejson/   JSON persistence and transfer adapter
-internal/ui/            Fyne presentation adapter and localization
+internal/ui/            lobe-mygo desktop UI, tray and localization
 internal/runner/        Runtime adapter dispatcher
 internal/wireproxy/     Embedded WireGuard/wireproxy adapter
 internal/tailscale/     Embedded Tailscale/tsnet adapter

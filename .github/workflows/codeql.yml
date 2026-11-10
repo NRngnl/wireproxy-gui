@@ -34,11 +34,6 @@ jobs:
           check-latest: true
           cache-dependency-path: go.sum
 
-      - name: Install Linux GUI build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc libgl1-mesa-dev pkg-config xorg-dev
-
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
