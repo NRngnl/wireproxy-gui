@@ -7,6 +7,8 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/field"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	"github.com/lobehub/lobe-mygo/pkg/overlay"
 	"github.com/lobehub/lobe-mygo/pkg/theme"
 
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
@@ -19,9 +21,19 @@ func (w *workbench) label(c *ui.Context, tk *theme.Tokens, text string) {
 const contentWidth = 760
 
 func (w *workbench) section(c *ui.Context, tk *theme.Tokens, key, title, desc string, body func()) {
+	w.sectionInfo(c, tk, key, title, desc, "", body)
+}
+
+func (w *workbench) sectionInfo(c *ui.Context, tk *theme.Tokens, key, title, desc, info string, body func()) {
 	layout.Block(c.Key(key), layout.BlockProps{Variant: layout.BlockOutlined}).Padding(narrow2(w.density == 1 || (w.width > 0 && w.width < narrowBelow), 12, 20)).Gap(16).Children(func() {
 		ui.Column(c).Gap(2).Children(func() {
-			ui.Text(c, title).FontSize(tk.FontSizeLG).FontWeight(600).TextColor(tk.Text)
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, title).FontSize(tk.FontSizeLG).FontWeight(600).TextColor(tk.Text)
+				if info != "" {
+					icon := action.ActionIcon(c.Key(key+"info"), lucide.Info(), action.ActionIconProps{Size: theme.Small, Title: title})
+					overlay.Tooltip(c, icon, info, overlay.TooltipProps{})
+				}
+			})
 			ui.Text(c, desc).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 		})
 		body()
