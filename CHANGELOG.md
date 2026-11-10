@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/NRngnl/wireproxy-gui/compare/v0.3.3...v0.4.0) (2026-11-10)
+
+
+### Features
+
+* **ui:** rebuild the desktop ui on lobe-mygo ([#26](https://github.com/NRngnl/wireproxy-gui/issues/26)) ([ac2347e](https://github.com/NRngnl/wireproxy-gui/commit/ac2347e7b8cacb8f925f2bba7308c7466246dd53))
+
 ## [0.3.3](https://github.com/NRngnl/wireproxy-gui/compare/v0.3.2...v0.3.3) (2026-11-07)
 
 
