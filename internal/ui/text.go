@@ -22,12 +22,6 @@ var usageGuideParagraphs = []string{
 	"Closing the window hides it when tray support is available. Use Quit from the tray menu to stop all profiles, wait briefly for them to close, and exit.",
 }
 
-type displayError string
-
-func (e displayError) Error() string {
-	return string(e)
-}
-
 func backendKindLabel(kind profile.BackendKind) string {
 	if (profile.Profile{Kind: kind}).IsTailscale() {
 		return tr("Tailscale")

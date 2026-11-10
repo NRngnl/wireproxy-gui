@@ -1,5 +1,3 @@
-//go:build js
-
 package ui
 
 import (
@@ -67,6 +65,7 @@ type workbench struct {
 	logID      string
 	logTail    map[string]bool
 	logY       map[string]float32
+	onChange   func()
 }
 
 func newWorkbench(core Application, look appearance, compact, railOpen bool) *workbench {
@@ -147,6 +146,9 @@ func (w *workbench) apply(frame presentationFrame, change application.Change) {
 	if change.Err != nil {
 		w.notice = displayErrorText(operationErrorTitle(change.Operation), change.Err)
 		w.noticeShut = false
+	}
+	if w.onChange != nil {
+		w.onChange()
 	}
 }
 

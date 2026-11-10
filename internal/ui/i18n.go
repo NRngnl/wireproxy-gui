@@ -227,7 +227,6 @@ var localizableErrors = []error{
 	connection.ErrNotTailscale,
 	connection.ErrNotRunning,
 	connection.ErrInvalidProfileID,
-	errNativeFileDialogUnavailable,
 }
 
 // Adapter-specific failures are localized by stable boundary text so the UI
