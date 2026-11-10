@@ -1,6 +1,6 @@
 // Package tui implements a terminal user interface frontend for the
 // Wireproxy GUI application core. It mirrors the composition role of
-// internal/ui but renders with Bubble Tea instead of Fyne.
+// internal/ui but renders with Bubble Tea instead of lobe-mygo.
 package tui
 
 import (

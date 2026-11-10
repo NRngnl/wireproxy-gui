@@ -1,6 +1,6 @@
 // Command wireproxy-daemon is the headless composition root: it wires the
 // same application.Service used by the GUI to a daemon.Run loop instead of
-// a Fyne UI, with structured logging suitable for systemd/journald.
+// a GUI, with structured logging suitable for systemd/journald.
 package main
 
 import (
