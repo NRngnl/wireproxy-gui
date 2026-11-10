@@ -6,6 +6,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/choice"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/field"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/theme"
 
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
@@ -15,30 +16,54 @@ func (w *workbench) label(c *ui.Context, tk *theme.Tokens, text string) {
 	ui.Text(c, text).FontSize(tk.FontSizeSM).FontWeight(500).TextColor(tk.TextSecondary)
 }
 
+const contentWidth = 760
+
+func (w *workbench) section(c *ui.Context, tk *theme.Tokens, key, title, desc string, body func()) {
+	layout.Block(c.Key(key), layout.BlockProps{Variant: layout.BlockOutlined}).Padding(narrow2(w.density == 1 || (w.width > 0 && w.width < narrowBelow), 12, 20)).Gap(16).Children(func() {
+		ui.Column(c).Gap(2).Children(func() {
+			ui.Text(c, title).FontSize(tk.FontSizeLG).FontWeight(600).TextColor(tk.Text)
+			ui.Text(c, desc).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
+		})
+		body()
+	})
+}
+
+func (w *workbench) field(c *ui.Context, tk *theme.Tokens, label, hint string, control func()) {
+	ui.Column(c).Gap(6).Children(func() {
+		if label != "" {
+			w.label(c, tk, label)
+		}
+		control()
+		if hint != "" {
+			w.hint(c, tk, hint)
+		}
+	})
+}
+
 func (w *workbench) form(c *ui.Context, tk *theme.Tokens, locked bool) {
 	sz := w.size()
-	ui.Column(c).Gap(10).MaxWidth(640).Children(func() {
-		w.label(c, tk, tr("Backend"))
-		action.Segmented(c.Key("kind"), &w.draft.Kind, []string{tr("WireGuard"), tr("Tailscale")}, action.SegmentedProps{Size: theme.Small}).Disabled(locked)
-		w.label(c, tk, tr("Name"))
-		field.Input(c.Key("name"), &w.draft.Name, field.InputProps{Size: sz})
-		ui.Row(c).Gap(10).Wrap().Children(func() {
-			ui.Column(c).Gap(4).Grow(1).Basis(200).Children(func() {
-				w.label(c, tk, tr("SOCKS5 host"))
-				field.Input(c.Key("host"), &w.draft.Host, field.InputProps{Size: sz}).Disabled(locked)
+	w.section(c, tk, "secconn", tr("Connection"), tr("Name, backend and the local SOCKS5 address apps connect to."), func() {
+		w.field(c, tk, tr("Name"), "", func() { field.Input(c.Key("name"), &w.draft.Name, field.InputProps{Size: sz}) })
+		w.field(c, tk, tr("Backend"), "", func() {
+			action.Segmented(c.Key("kind"), &w.draft.Kind, []string{tr("WireGuard"), tr("Tailscale")}, action.SegmentedProps{Size: theme.Small}).Disabled(locked).AlignSelf(ui.Start)
+		})
+		ui.Row(c).Gap(12).Wrap().Children(func() {
+			ui.Column(c).Grow(1).Basis(200).Children(func() {
+				w.field(c, tk, tr("SOCKS5 host"), "", func() { field.Input(c.Key("host"), &w.draft.Host, field.InputProps{Size: sz}).Disabled(locked) })
 			})
-			ui.Column(c).Gap(4).Width(120).Children(func() {
-				w.label(c, tk, tr("SOCKS5 port"))
-				field.Input(c.Key("port"), &w.draft.Port, field.InputProps{Size: sz}).Disabled(locked)
+			ui.Column(c).Width(120).Children(func() {
+				w.field(c, tk, tr("SOCKS5 port"), "", func() { field.Input(c.Key("port"), &w.draft.Port, field.InputProps{Size: sz}).Disabled(locked) })
 			})
 		})
-		w.label(c, tk, tr("Startup"))
-		choice.Checkbox(c.Key("auto"), &w.draft.AutoStart, tr("Connect when app opens"), choice.CheckboxProps{})
-		if w.draft.Kind == 1 {
-			w.tailscaleForm(c, tk, w.frame.Selected)
-			return
-		}
-		w.label(c, tk, tr("WireGuard configuration"))
+		w.field(c, tk, tr("Startup"), "", func() {
+			choice.Checkbox(c.Key("auto"), &w.draft.AutoStart, tr("Connect when app opens"), choice.CheckboxProps{})
+		})
+	})
+	if w.draft.Kind == 1 {
+		w.tailscaleForm(c, tk, w.frame.Selected)
+		return
+	}
+	w.section(c, tk, "secwg", tr("WireGuard configuration"), tr("Paste the [Interface] and [Peer] sections from your WireGuard config."), func() {
 		field.TextArea(c.Key("conf"), &w.draft.Config, field.TextAreaProps{MinRows: 6, MaxRows: 14}).Disabled(locked)
 	})
 }

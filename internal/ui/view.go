@@ -79,7 +79,7 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 			}
 		})
 		ui.Scroll(c).Grow(1).Basis(0).MinHeight(0).Children(func() {
-			ui.Column(c).Padding(16, pad, pad, pad).Gap(16).Children(func() {
+			ui.Column(c).Padding(16, pad, pad, pad).Gap(16).MaxWidth(contentWidth + 2*pad).Children(func() {
 				if w.notice != "" && !w.noticeShut {
 					feedback.Alert(c, w.notice, feedback.AlertProps{Type: feedback.Error, Closed: &w.noticeShut})
 				}
@@ -149,7 +149,10 @@ func (w *workbench) connectButton(c *ui.Context, sel *selectedProfile) {
 }
 
 func (w *workbench) activity(c *ui.Context, tk *theme.Tokens, sel *selectedProfile) {
-	ui.Text(c, tr("Activity")).FontWeight(600).TextColor(tk.Text)
+	w.section(c, tk, "seclog", tr("Activity"), tr("Recent events for this profile."), func() { w.activityLog(c, tk, sel) })
+}
+
+func (w *workbench) activityLog(c *ui.Context, tk *theme.Tokens, sel *selectedProfile) {
 	id := sel.Profile.ID
 	if w.logID != "" {
 		w.logTail[w.logID] = w.logScroll.MaxY-w.logScroll.Y < 4

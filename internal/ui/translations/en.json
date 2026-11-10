@@ -168,5 +168,20 @@
   "wait until the Tailscale profile is connected or disconnected before changing exit-node settings": "wait until the Tailscale profile is connected or disconnected before changing exit-node settings",
   "wireproxy config does not contain a SOCKS5 listener": "wireproxy config does not contain a SOCKS5 listener",
   "wireproxy config validation failed": "wireproxy config validation failed",
-  "wireproxy config validation failed: {{.Message}}": "wireproxy config validation failed: {{.Message}}"
+  "wireproxy config validation failed: {{.Message}}": "wireproxy config validation failed: {{.Message}}",
+  "Connection": "Connection",
+  "Name, backend and the local SOCKS5 address apps connect to.": "Name, backend and the local SOCKS5 address apps connect to.",
+  "Paste the [Interface] and [Peer] sections from your WireGuard config.": "Paste the [Interface] and [Peer] sections from your WireGuard config.",
+  "Tailscale device": "Tailscale device",
+  "How this app registers itself on your tailnet.": "How this app registers itself on your tailnet.",
+  "Authentication": "Authentication",
+  "Sign this device in to your tailnet.": "Sign this device in to your tailnet.",
+  "Route traffic through another device on your tailnet.": "Route traffic through another device on your tailnet.",
+  "Recent events for this profile.": "Recent events for this profile.",
+  "Appearance": "Appearance",
+  "Theme": "Theme",
+  "Density": "Density",
+  "Protocol": "Protocol",
+  "Target": "Target",
+  "Port": "Port"
 }
