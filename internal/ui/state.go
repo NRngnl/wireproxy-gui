@@ -49,6 +49,8 @@ type workbench struct {
 	noticeShut bool
 	railOpen   bool
 	width      float32
+	height     float32
+	railWidth  float32
 	look       int
 	density    int
 	logScroll  ui.ScrollState
@@ -70,7 +72,7 @@ type workbench struct {
 }
 
 func newWorkbench(core Application, look appearance, compact, railOpen bool) *workbench {
-	w := &workbench{core: core, wake: make(chan struct{}, 1), look: int(look), railOpen: railOpen, logTail: map[string]bool{}, logY: map[string]float32{}}
+	w := &workbench{core: core, wake: make(chan struct{}, 1), look: int(look), railOpen: railOpen, logTail: map[string]bool{}, logY: map[string]float32{}, railWidth: 264}
 	if compact {
 		w.density = 1
 	}

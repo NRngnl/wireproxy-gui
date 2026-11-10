@@ -7,6 +7,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	"github.com/lobehub/lobe-mygo/pkg/theme"
 
@@ -20,8 +21,8 @@ func (w *workbench) view(c *ui.Context) {
 	tk := theme.TokensOf(c)
 	root := ui.Row(c).Fill().Background(tk.BgLayout).AlignItems(ui.Stretch)
 	if w.window != nil {
-		cw, _ := w.window.ContentSize()
-		w.width = float32(cw)
+		cw, ch := w.window.ContentSize()
+		w.width, w.height = float32(cw), float32(ch)
 	}
 	narrow := w.width > 0 && w.width < narrowBelow
 	root.Children(func() {
@@ -49,13 +50,19 @@ func statusColor(s application.Status) display.TagColor {
 }
 
 func (w *workbench) rail(c *ui.Context, tk *theme.Tokens, narrow bool) {
-	col := ui.Column(c).Padding(10).Gap(4).Background(tk.BgLayout)
 	if narrow {
-		col.Grow(1).MinWidth(0)
-	} else {
-		col.Width(264).Shrink(0)
+		ui.Column(c).Padding(10).Gap(4).Background(tk.BgLayout).Grow(1).MinWidth(0).Children(func() { w.railBody(c, tk) })
+		return
 	}
-	col.Children(func() {
+	expanded := true
+	layout.DraggableSideNav(c, &w.railWidth, &expanded, layout.DraggableSideNavProps{MinWidth: 240, MaxWidth: max(240, w.width-480), NoExpand: true},
+		func(layout.SideNavState) {
+			ui.Column(c).Padding(10).Gap(4).MinHeight(w.height).Children(func() { w.railBody(c, tk) })
+		})
+}
+
+func (w *workbench) railBody(c *ui.Context, tk *theme.Tokens) {
+	func() {
 		ui.Text(c, tr("Profiles")).FontSize(tk.FontSizeLG).FontWeight(600).TextColor(tk.Text).Padding(6, 8)
 		ui.Text(c, w.frame.Summary).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).PaddingX(8).Margin(0, 0, 6, 0)
 		ui.Scroll(c).Grow(1).Basis(0).Children(func() {
@@ -67,7 +74,7 @@ func (w *workbench) rail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 		})
 		w.railActions(c)
 		w.appearanceControls(c)
-	})
+	}()
 }
 
 func (w *workbench) railActions(c *ui.Context) {
