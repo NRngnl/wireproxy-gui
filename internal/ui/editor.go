@@ -83,7 +83,8 @@ func (w *workbench) add() {
 }
 
 func (w *workbench) remove(id string) {
-	if err := w.core.Delete(id); err != nil {
+	err := w.core.Delete(id)
+	if err != nil {
 		w.report("Delete profile", err)
 		return
 	}
