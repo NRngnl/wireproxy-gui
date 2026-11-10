@@ -65,6 +65,8 @@ type workbench struct {
 	infoShut   bool
 	confirmDel bool
 	helpOpen   bool
+	moreOpen   bool
+	lookOpen   bool
 	logID      string
 	logTail    map[string]bool
 	logY       map[string]float32
