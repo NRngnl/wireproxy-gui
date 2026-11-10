@@ -12,8 +12,8 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/things-go/go-socks5 v0.1.4
 	github.com/windtf/wireproxy v1.1.3
-	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.47.0
+	golang.org/x/sys v0.50.0
+	golang.org/x/term v0.48.0
 	golang.zx2c4.com/wireguard v0.0.0-20261024220952-b3bc704ef0ee
 	tailscale.com v1.104.5
 )
