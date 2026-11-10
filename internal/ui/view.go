@@ -165,7 +165,7 @@ func (w *workbench) activity(c *ui.Context, tk *theme.Tokens, sel *selectedProfi
 	if w.logScroll.MaxY-w.logScroll.Y < 4 {
 		w.logScroll.Y = math.MaxFloat32
 	}
-	panel := ui.Scroll(c).Grow(1).Basis(0).MinHeight(120).Background(tk.BgLayout).Radius(tk.BorderRadiusLG).Padding(10).TrackScroll(&w.logScroll)
+	panel := ui.Scroll(c).MaxHeight(280).Background(tk.BgLayout).Radius(tk.BorderRadiusLG).Padding(10).TrackScroll(&w.logScroll)
 	panel.Children(func() {
 		text := profileLogText(sel.Logs)
 		if text == "" {
