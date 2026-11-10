@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/NRngnl/wireproxy-gui/internal/application"
+	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
 )
 
@@ -208,4 +209,15 @@ func safeFileName(name string) string {
 		return "profile"
 	}
 	return out
+}
+
+func exitNodeOptionLabel(node connection.ExitNode) string {
+	label := strings.TrimSpace(node.Name)
+	if label == "" {
+		label = strings.TrimSpace(node.ID)
+	}
+	if label == "" && len(node.TailscaleIPs) > 0 {
+		label = node.TailscaleIPs[0]
+	}
+	return label
 }

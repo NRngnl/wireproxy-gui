@@ -5,6 +5,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -14,12 +15,24 @@ import (
 )
 
 type draft struct {
-	ID, Name, Host, Port, Config string
-	AutoStart                    bool
+	ID, Name, Host, Port, Config  string
+	AutoStart                     bool
+	Kind                          int
+	Hostname, AuthKey, ControlURL string
+	ExitNode                      string
+	AutoExit, AllowLAN, Ephemeral bool
+	Forwards                      []profile.PortForward
 }
 
 func newDraft(p profile.Profile) draft {
-	return draft{ID: p.ID, Name: p.Name, Host: p.SocksHost, Port: strconv.Itoa(p.SocksPort), Config: p.WireGuardConfig, AutoStart: p.AutoStart}
+	ts := p.TailscaleConfig
+	d := draft{ID: p.ID, Name: p.Name, Host: p.SocksHost, Port: strconv.Itoa(p.SocksPort), Config: p.WireGuardConfig, AutoStart: p.AutoStart,
+		Hostname: ts.Hostname, AuthKey: ts.AuthKey, ControlURL: ts.ControlURL, ExitNode: ts.ExitNode,
+		AutoExit: ts.AutoExitNode, AllowLAN: ts.ExitNodeAllowLANAccess, Ephemeral: ts.Ephemeral, Forwards: slices.Clone(ts.PortForwards)}
+	if p.IsTailscale() {
+		d.Kind = 1
+	}
+	return d
 }
 
 func (d draft) apply(p profile.Profile) (profile.Profile, error) {
@@ -28,8 +41,19 @@ func (d draft) apply(p profile.Profile) (profile.Profile, error) {
 		return p, profile.ErrSocksPortNotNumber
 	}
 	p.Name, p.SocksHost, p.SocksPort, p.AutoStart = strings.TrimSpace(d.Name), strings.TrimSpace(d.Host), port, d.AutoStart
-	p.Kind = profile.BackendWireGuard
-	p.WireGuardConfig = strings.TrimSpace(d.Config)
+	if d.Kind == 1 {
+		p.Kind = profile.BackendTailscale
+		exit := d.ExitNode
+		if d.AutoExit {
+			exit = ""
+		}
+		p.TailscaleConfig = profile.TailscaleConfig{Hostname: d.Hostname, AuthKey: d.AuthKey, Authenticated: p.TailscaleConfig.Authenticated,
+			ControlURL: d.ControlURL, ExitNode: exit, AutoExitNode: d.AutoExit, ExitNodeAllowLANAccess: d.AllowLAN,
+			Ephemeral: d.Ephemeral, PortForwards: slices.Clone(d.Forwards)}
+	} else {
+		p.Kind = profile.BackendWireGuard
+		p.WireGuardConfig = strings.TrimSpace(d.Config)
+	}
 	p.Normalize()
 	return p, p.Validate()
 }
@@ -37,16 +61,16 @@ func (d draft) apply(p profile.Profile) (profile.Profile, error) {
 func (w *workbench) syncDraft() {
 	if sel := w.frame.Selected; sel != nil && w.draft.ID != sel.Profile.ID {
 		w.draft = newDraft(sel.Profile)
+		w.exitNodes, w.exitBusy, w.exitSeq, w.fwdPort, w.fwdTarget = nil, false, w.exitSeq+1, "", ""
 	}
 }
 
-func (w *workbench) persist(title string) bool {
-	sel := w.frame.Selected
+func (w *workbench) persist(title string, d draft, sel *selectedProfile) bool {
 	if sel == nil {
 		return false
 	}
-	p, err := w.draft.apply(sel.Profile)
-	if err == nil && !sel.Locked {
+	p, err := d.apply(sel.Profile)
+	if err == nil {
 		_, err = w.core.Save(p)
 	}
 	if err != nil {
@@ -57,7 +81,7 @@ func (w *workbench) persist(title string) bool {
 }
 
 func (w *workbench) save() {
-	if w.persist("Save profile") {
+	if w.persist("Save profile", w.draft, w.frame.Selected) {
 		w.say(tr("Saved"))
 	}
 }

@@ -38,6 +38,17 @@ func newFixture(name string) *fixture {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	f.logs[home.ID] = []application.LogEntry{{At: now, Message: "connected on 127.0.0.1:1080"}}
 	switch name {
+	case "ts", "ts-authed", "ts-running":
+		ts.TailscaleConfig.Hostname = "travel-node"
+		ts.TailscaleConfig.PortForwards = []profile.PortForward{{ListenPort: 8080, Protocol: profile.PortForwardTCP, TargetAddr: "192.168.1.10:80"}}
+		if name != "ts" {
+			ts.TailscaleConfig.Authenticated = true
+			ts.TailscaleConfig.ExitNode = "exit-1"
+		}
+		if name == "ts-running" {
+			f.statuses[ts.ID] = application.StatusRunning
+		}
+		f.profiles = []profile.Profile{ts, home, office}
 	case "error":
 		f.statuses[office.ID] = application.StatusError
 		f.logs[office.ID] = []application.LogEntry{{At: now, Message: "dial udp 198.51.100.7:51820: i/o timeout"}}
@@ -114,7 +125,17 @@ func (f *fixture) ConnectAll() error {
 	f.poke()
 	return nil
 }
-func (*fixture) Login(string) error { return errPreview }
+func (f *fixture) Login(id string) error { return f.setAuth(id, true) }
+func (f *fixture) setAuth(id string, on bool) error {
+	for i := range f.profiles {
+		if f.profiles[i].ID == id {
+			f.profiles[i].TailscaleConfig.Authenticated = on
+			f.profiles[i].TailscaleConfig.AuthKey = ""
+		}
+	}
+	f.poke()
+	return nil
+}
 func (*fixture) AutoConnect() error { return nil }
 func (f *fixture) Disconnect(id string) bool {
 	delete(f.statuses, id)
@@ -127,7 +148,7 @@ func (f *fixture) DisconnectAll() {
 	f.poke()
 }
 func (*fixture) ExitNodes(context.Context, string) ([]connection.ExitNode, error) {
-	return nil, errPreview
+	return []connection.ExitNode{{ID: "exit-1", Name: "frankfurt-exit", Online: true}, {ID: "exit-2", Name: "tokyo-exit", Online: false}}, nil
 }
-func (*fixture) Logout(context.Context, string) error { return errPreview }
-func (*fixture) Shutdown(context.Context) error       { return nil }
+func (f *fixture) Logout(_ context.Context, id string) error { return f.setAuth(id, false) }
+func (*fixture) Shutdown(context.Context) error              { return nil }

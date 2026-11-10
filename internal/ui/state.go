@@ -11,6 +11,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/theme"
 
 	"github.com/NRngnl/wireproxy-gui/internal/application"
+	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
 )
 
@@ -54,6 +55,12 @@ type workbench struct {
 	density    int
 	logScroll  ui.ScrollState
 	draft      draft
+	exitNodes  []connection.ExitNode
+	exitBusy   bool
+	exitSeq    int
+	fwdProto   int
+	fwdPort    string
+	fwdTarget  string
 	info       string
 	infoShut   bool
 	confirmDel bool
@@ -134,6 +141,9 @@ func (w *workbench) publish(change application.Change) {
 
 func (w *workbench) apply(frame presentationFrame, change application.Change) {
 	w.frame = frame
+	if sel := frame.Selected; sel != nil && sel.Profile.TailscaleConfig.Authenticated && w.draft.ID == sel.Profile.ID {
+		w.draft.AuthKey = ""
+	}
 	if change.Err != nil {
 		w.notice = displayErrorText(operationErrorTitle(change.Operation), change.Err)
 		w.noticeShut = false

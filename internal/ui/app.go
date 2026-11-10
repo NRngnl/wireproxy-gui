@@ -627,17 +627,6 @@ func (g *GUI) selectedExitNodeValue() string {
 	return value
 }
 
-func exitNodeOptionLabel(node connection.ExitNode) string {
-	label := strings.TrimSpace(node.Name)
-	if label == "" {
-		label = strings.TrimSpace(node.ID)
-	}
-	if label == "" && len(node.TailscaleIPs) > 0 {
-		label = node.TailscaleIPs[0]
-	}
-	return label
-}
-
 func exitNodeLabelForValue(values map[string]string, value string) (string, bool) {
 	for label, mapped := range values {
 		if mapped == value {

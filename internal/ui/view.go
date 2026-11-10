@@ -84,8 +84,9 @@ func (w *workbench) railActions(c *ui.Context) {
 			w.export(w.core.Profiles(), "wireproxy-profiles.json")
 		}
 		if action.Button(c.Key("connall"), tr("Connect All"), action.ButtonProps{Size: sz}).Clicked() {
+			d, sel := w.draft, w.frame.Selected
 			go func() {
-				if w.persist("Connect All") {
+				if w.persist("Connect All", d, sel) {
 					w.report("Connect All", w.core.ConnectAll())
 				}
 			}()
@@ -182,8 +183,9 @@ func (w *workbench) profileHeader(c *ui.Context, tk *theme.Tokens, sel *selected
 				w.core.Disconnect(id)
 			}
 		} else if action.Button(c.Key("connect"), tr("Connect"), action.ButtonProps{Variant: action.Primary, Size: w.size()}).Clicked() {
+			d, sel := w.draft, w.frame.Selected
 			go func() {
-				if w.persist("Connect profile") {
+				if w.persist("Connect profile", d, sel) {
 					w.report("Connect profile", w.core.Connect(id))
 				}
 			}()
