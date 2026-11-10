@@ -65,7 +65,11 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 	sel := w.frame.Selected
 	pad := narrow2(narrow, 14, 24)
 	ui.Column(c).Grow(1).Basis(0).MinWidth(0).Background(tk.BgContainer).Children(func() {
-		ui.Column(c).Padding(pad, pad, 14, pad).Gap(10).Shrink(0).BorderWidth(0, 0, 1, 0).BorderColor(tk.BorderSecondary).Children(func() {
+		head := ui.Column(c).Padding(pad, pad, 14, pad).Gap(10).Shrink(0)
+		if sel != nil {
+			head.BorderWidth(0, 0, 1, 0).BorderColor(tk.BorderSecondary)
+		}
+		head.Children(func() {
 			if narrow {
 				ui.Row(c).Children(func() {
 					if action.Button(c.Key("rail"), "← "+tr("Profiles"), action.ButtonProps{Variant: action.Link, Size: w.size()}).Clicked() {
@@ -84,9 +88,7 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 					feedback.Alert(c, w.notice, feedback.AlertProps{Type: feedback.Error, Closed: &w.noticeShut})
 				}
 				if sel == nil {
-					display.Empty(c, display.EmptyProps{Icon: lucide.Inbox(), Title: tr("No profiles yet"),
-						Description: tr("Add a profile or import WireGuard configuration to begin.")})
-					ui.Row(c).Justify(ui.Center).Gap(8).Children(func() { w.addImport(c, "empty") })
+					w.emptyState(c, tk)
 					return
 				}
 				if w.info != "" && !w.infoShut {
@@ -176,6 +178,22 @@ func (w *workbench) activityLog(c *ui.Context, tk *theme.Tokens, sel *selectedPr
 	})
 }
 
+func (w *workbench) emptyState(c *ui.Context, tk *theme.Tokens) {
+	ui.Column(c).AlignItems(ui.Center).Gap(16).Padding(max(24, w.height/2-220), 0, 24, 0).Children(func() {
+		ui.Box(c).Size(64, 64).Radius(16).Background(tk.FillTertiary).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+			ui.Icon(c, lucide.Waypoints()).FontSize(30).TextColor(tk.TextSecondary)
+		})
+		ui.Column(c).AlignItems(ui.Center).Gap(6).MaxWidth(360).Children(func() {
+			ui.Text(c, tr("No profiles yet")).FontSize(tk.FontSizeHeading4).FontWeight(600).TextColor(tk.Text)
+			ui.Text(c, tr("Add a profile or import WireGuard configuration to begin.")).TextColor(tk.TextSecondary).TextAlign(ui.Center)
+		})
+		ui.Row(c).Gap(8).Children(func() { w.addImport(c, "empty") })
+		if action.Button(c.Key("emptyhelp"), tr("Usage guide"), action.ButtonProps{Variant: action.Link, Size: w.size()}).Clicked() {
+			w.helpOpen = true
+		}
+	})
+}
+
 func (w *workbench) addImport(c *ui.Context, key string) {
 	sz := w.size()
 	if action.Button(c.Key(key+"add"), tr("Add Profile"), action.ButtonProps{Variant: action.Primary, Size: sz}).Clicked() {
@@ -187,11 +205,18 @@ func (w *workbench) addImport(c *ui.Context, key string) {
 }
 
 func (w *workbench) usageGuide(c *ui.Context) {
-	feedback.Modal(c, &w.helpOpen, feedback.ModalProps{Title: tr("Usage guide"), Width: 720, NoFooter: true}, func() {
-		ui.Scroll(c).MaxHeight(440).Children(func() {
-			ui.Column(c).Gap(12).Children(func() {
+	tk := theme.TokensOf(c)
+	feedback.Modal(c, &w.helpOpen, feedback.ModalProps{Title: tr("Usage guide"), Width: 680, NoFooter: true}, func() {
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Margin(0, 0, 16, 0).Children(func() {
+			ui.Box(c).Size(36, 36).Radius(10).Background(tk.FillTertiary).AlignItems(ui.Center).Justify(ui.Center).Shrink(0).Children(func() {
+				ui.Icon(c, lucide.BookOpen()).FontSize(18).TextColor(tk.TextSecondary)
+			})
+			ui.Text(c, tr("How profiles, connections and the tray work.")).TextColor(tk.TextSecondary).Grow(1).MinWidth(0)
+		})
+		ui.Scroll(c).MaxHeight(min(460, max(180, w.height-260))).Children(func() {
+			ui.Column(c).Gap(14).PaddingX(2).Children(func() {
 				for _, p := range usageGuideParagraphs {
-					ui.Text(c, tr(p)).Selectable()
+					ui.Text(c, tr(p)).LineHeight(1.6).TextColor(tk.Text).Selectable()
 				}
 			})
 		})

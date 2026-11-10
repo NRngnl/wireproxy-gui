@@ -13,6 +13,7 @@ type PreviewOptions struct {
 	Dark     bool
 	Compact  bool
 	RailOpen bool
+	Help     bool
 }
 
 func Preview(core Application, opts PreviewOptions) error {
@@ -21,6 +22,7 @@ func Preview(core Application, opts PreviewOptions) error {
 		look = appearanceDark
 	}
 	w := newWorkbench(core, look, opts.Compact, opts.RailOpen)
+	w.helpOpen = opts.Help
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mygo.App.WhenReady(func() {
