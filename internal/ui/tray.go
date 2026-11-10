@@ -17,7 +17,11 @@ import (
 )
 
 func (d *host) installTray() {
-	tray, err := mygo.NewTray(mygo.TrayOptions{ID: "wireproxy-gui", Icon: appIconPNG, ToolTip: tr("Wireproxy GUI"), Menu: d.trayMenu()})
+	icon, template := appIconPNG, false
+	if runtime.GOOS == "darwin" {
+		icon, template = macTrayIconPNG, true
+	}
+	tray, err := mygo.NewTray(mygo.TrayOptions{ID: "wireproxy-gui", Icon: icon, IconIsTemplate: template, ToolTip: tr("Wireproxy GUI"), Menu: d.trayMenu()})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "wireproxy-gui: tray unavailable:", err)
 		return

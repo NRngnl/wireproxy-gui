@@ -21,6 +21,9 @@ const shutdownWaitTimeout = 5 * time.Second
 //go:embed appicon.png
 var appIconPNG []byte
 
+//go:embed trayicon.png
+var macTrayIconPNG []byte
+
 type host struct {
 	w      *workbench
 	ctx    context.Context
