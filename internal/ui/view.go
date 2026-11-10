@@ -65,7 +65,7 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 	sel := w.frame.Selected
 	pad := narrow2(narrow, 14, 24)
 	ui.Column(c).Grow(1).Basis(0).MinWidth(0).Background(tk.BgContainer).Children(func() {
-		ui.Column(c).Padding(pad, pad, 10, pad).Gap(10).Shrink(0).Children(func() {
+		ui.Column(c).Padding(pad, pad, 14, pad).Gap(10).Shrink(0).BorderWidth(0, 0, 1, 0).BorderColor(tk.BorderSecondary).Children(func() {
 			if narrow {
 				ui.Row(c).Children(func() {
 					if action.Button(c.Key("rail"), "← "+tr("Profiles"), action.ButtonProps{Variant: action.Link, Size: w.size()}).Clicked() {
@@ -79,7 +79,7 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 			}
 		})
 		ui.Scroll(c).Grow(1).Basis(0).MinHeight(0).Children(func() {
-			ui.Column(c).Padding(4, pad, pad, pad).Gap(14).Children(func() {
+			ui.Column(c).Padding(16, pad, pad, pad).Gap(16).Children(func() {
 				if w.notice != "" && !w.noticeShut {
 					feedback.Alert(c, w.notice, feedback.AlertProps{Type: feedback.Error, Closed: &w.noticeShut})
 				}
@@ -92,12 +92,13 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 				if w.info != "" && !w.infoShut {
 					feedback.Alert(c, w.info, feedback.AlertProps{Type: feedback.Success, Closed: &w.infoShut})
 				}
-				w.facts(c, tk, sel)
 				w.form(c, tk, sel.Locked)
-				w.actions(c, tk)
 				w.activity(c, tk, sel)
 			})
 		})
+		if sel != nil {
+			w.actions(c, tk, pad)
+		}
 	})
 }
 
@@ -109,40 +110,42 @@ func narrow2(narrow bool, a, b float32) float32 {
 }
 
 func (w *workbench) profileHeader(c *ui.Context, tk *theme.Tokens, sel *selectedProfile) {
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-		ui.Text(c, sel.Profile.Name).FontSize(22).FontWeight(600).TextColor(tk.Text).SingleLine().Ellipsis("…").MinWidth(0).Shrink(1)
-		color := statusColor(sel.Status)
-		display.Tag(c, statusTitleText(string(sel.Status)), display.TagProps{Color: color, Round: true})
-	})
-	ui.Row(c).Gap(8).Wrap().Children(func() {
-		id := sel.Profile.ID
-		if sel.Locked {
-			label := tr("Disconnect")
-			switch sel.Status {
-			case application.StatusStarting:
-				label = tr("Cancel Connection")
-			case application.StatusStopping:
-				label = tr("Disconnecting…")
+	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, sel.Profile.Name).FontSize(22).FontWeight(600).TextColor(tk.Text).SingleLine().Ellipsis("…").MinWidth(0).Shrink(1)
+				display.Tag(c, statusTitleText(string(sel.Status)), display.TagProps{Color: statusColor(sel.Status), Variant: display.TagFilled, Round: true}).Shrink(0)
+			})
+			ui.Text(c, profileMetaText(sel.Profile)).FontSize(tk.FontSizeSM).TextColor(tk.TextSecondary).SingleLine().Ellipsis("…")
+			if d := profileNetworkDetailText(sel.Profile); d != "" {
+				ui.Text(c, d).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).SingleLine().Ellipsis("…")
 			}
-			if action.Button(c.Key("disconnect"), label, action.ButtonProps{Variant: action.Primary, Size: w.size()}).Disabled(sel.Status == application.StatusStopping).Clicked() {
-				w.core.Disconnect(id)
-			}
-		} else if action.Button(c.Key("connect"), tr("Connect"), action.ButtonProps{Variant: action.Primary, Size: w.size()}).Clicked() {
-			d, sel := w.draft, w.frame.Selected
-			go func() {
-				if w.persist("Connect profile", d, sel) {
-					w.report("Connect profile", w.core.Connect(id))
-				}
-			}()
-		}
+		})
+		w.connectButton(c, sel)
 	})
 }
 
-func (w *workbench) facts(c *ui.Context, tk *theme.Tokens, sel *selectedProfile) {
-	ui.Column(c).Gap(2).Children(func() {
-		ui.Text(c, profileMetaText(sel.Profile)).TextColor(tk.TextSecondary)
-		ui.Text(c, profileNetworkDetailText(sel.Profile)).TextColor(tk.TextDescription)
-	})
+func (w *workbench) connectButton(c *ui.Context, sel *selectedProfile) {
+	id := sel.Profile.ID
+	if sel.Locked {
+		label := tr("Disconnect")
+		switch sel.Status {
+		case application.StatusStarting:
+			label = tr("Cancel Connection")
+		case application.StatusStopping:
+			label = tr("Disconnecting…")
+		}
+		if action.Button(c.Key("disconnect"), label, action.ButtonProps{Size: w.size()}).Shrink(0).Disabled(sel.Status == application.StatusStopping).Clicked() {
+			w.core.Disconnect(id)
+		}
+	} else if action.Button(c.Key("connect"), tr("Connect"), action.ButtonProps{Variant: action.Primary, Size: w.size()}).Shrink(0).Clicked() {
+		d, sel := w.draft, w.frame.Selected
+		go func() {
+			if w.persist("Connect profile", d, sel) {
+				w.report("Connect profile", w.core.Connect(id))
+			}
+		}()
+	}
 }
 
 func (w *workbench) activity(c *ui.Context, tk *theme.Tokens, sel *selectedProfile) {

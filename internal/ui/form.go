@@ -43,9 +43,10 @@ func (w *workbench) form(c *ui.Context, tk *theme.Tokens, locked bool) {
 	})
 }
 
-func (w *workbench) actions(c *ui.Context, tk *theme.Tokens) {
+func (w *workbench) actions(c *ui.Context, tk *theme.Tokens, pad float32) {
 	sz := w.size()
-	ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Padding(12, pad).Background(tk.BgContainer).
+		BorderWidth(1, 0, 0, 0).BorderColor(tk.BorderSecondary).Children(func() {
 		if action.Button(c.Key("save"), tr("Save"), action.ButtonProps{Variant: action.Primary, Size: sz}).Clicked() {
 			w.save()
 		}
@@ -53,8 +54,8 @@ func (w *workbench) actions(c *ui.Context, tk *theme.Tokens) {
 			p := w.frame.Selected.Profile
 			w.export([]profile.Profile{p}, safeFileName(p.Name)+".json")
 		}
-		ui.Box(c).Width(24)
-		if action.Button(c.Key("delete"), tr("Delete"), action.ButtonProps{Variant: action.Text, Size: sz}).TextColor(tk.Error).Clicked() {
+		ui.Box(c).Grow(1)
+		if action.Button(c.Key("delete"), tr("Delete"), action.ButtonProps{Size: sz}).TextColor(tk.Error).BorderColor(tk.ErrorBorder).Clicked() {
 			w.confirmDel = true
 		}
 	})
