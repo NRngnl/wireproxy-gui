@@ -17,7 +17,6 @@ permissions:
 
 env:
   APP_ID: com.github.nrngnl.wireproxy-gui
-  FYNE_CROSS_VERSION: v1.6.2
 
 jobs:
   test:
@@ -82,13 +81,9 @@ jobs:
           - target: windows-amd64
             goos: windows
             goarch: amd64
-            artifact_arch: amd64
-            fyne_name: wireproxy-gui
           - target: windows-aarch64
             goos: windows
             goarch: arm64
-            artifact_arch: aarch64
-            fyne_name: wireproxy-gui
 
     steps:
       - name: Check out repository
@@ -107,14 +102,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y zip
-          go install "github.com/fyne-io/fyne-cross@${FYNE_CROSS_VERSION}"
-          mod_dir="$(go env GOMODCACHE)/github.com/fyne-io/fyne-cross@${FYNE_CROSS_VERSION}"
-          patched_dir="${RUNNER_TEMP}/fyne-cross-patched"
-          cp -R "$mod_dir" "$patched_dir"
-          chmod -R u+w "$patched_dir"
-          perl -0pi -e 's/appBuildOpt := "-app-build"\n\tappVersionOpt := "-app-version"/appBuildOpt := "-appBuild"\n\tappVersionOpt := "-appVersion"/' "$patched_dir/internal/command/command.go"
-          (cd "$patched_dir" && go install .)
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Build release artifact
         shell: bash
@@ -122,71 +109,11 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '0.0.0' }}
           TARGET_OS: ${{ matrix.goos }}
           TARGET_ARCH: ${{ matrix.goarch }}
-          ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
-          FYNE_NAME: ${{ matrix.fyne_name }}
           GOTOOLCHAIN: auto
         run: |
           set -euo pipefail
-
-          version="${RELEASE_TAG#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "release version must look like 0.1.0; got '${version}'" >&2
-            exit 1
-          fi
-
-          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          commit="${GITHUB_SHA::12}"
-          cat > internal/buildinfo/release_generated.go <<GO
-          package buildinfo
-
-          func init() {
-            Version = "${version}"
-            Commit = "${commit}"
-            Date = "${build_date}"
-          }
-          GO
-          trap 'rm -f internal/buildinfo/release_generated.go' EXIT
-
-          rm -rf dist/release/artifacts fyne-cross
-          fyne-cross "$TARGET_OS" \
-            -arch "$TARGET_ARCH" \
-            -app-id "$APP_ID" \
-            -app-version "$version" \
-            -app-build "$GITHUB_RUN_NUMBER" \
-            -name "$FYNE_NAME" \
-            -pull \
-            -env GOTOOLCHAIN=auto \
-            ./cmd/wireproxy-gui
-
-          target_dir="fyne-cross/dist/${TARGET_OS}-${TARGET_ARCH}"
-          artifact_dir="dist/release/artifacts"
-          artifact_base="wireproxy-gui_${version}_${TARGET_OS}_${ARTIFACT_ARCH}"
-          mkdir -p "$artifact_dir"
-
-          case "$TARGET_OS" in
-            linux)
-              source_file="$(find "$target_dir" -maxdepth 1 -type f -name '*.tar.xz' -print -quit)"
-              artifact="${artifact_dir}/${artifact_base}.tar.xz"
-              cp "$source_file" "$artifact"
-              ;;
-            windows)
-              source_file="$(find "$target_dir" -maxdepth 1 -type f -name '*.zip' -print -quit)"
-              artifact="${artifact_dir}/${artifact_base}.zip"
-              cp "$source_file" "$artifact"
-              ;;
-            *)
-              echo "unsupported target OS: $TARGET_OS" >&2
-              exit 1
-              ;;
-          esac
-
-          if [[ ! -f "$artifact" ]]; then
-            echo "artifact was not created: $artifact" >&2
-            find fyne-cross -maxdepth 4 -print >&2
-            exit 1
-          fi
-          sha256sum "$artifact" > "${artifact}.sha256"
-          ls -lh "$artifact" "${artifact}.sha256"
+          rm -rf dist/release/artifacts
+          RELEASE_VERSION="$RELEASE_TAG" GOOS="$TARGET_OS" GOARCH="$TARGET_ARCH" scripts/build-release.sh
 
       - name: Keep artifact for smoke test
         uses: actions/upload-artifact@v5
@@ -229,10 +156,10 @@ jobs:
           check-latest: true
           cache-dependency-path: go.sum
 
-      - name: Install GUI build dependencies
+      - name: Install GUI runtime dependencies for the smoke test
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc pkg-config libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev xvfb
+          sudo apt-get install -y libgtk-3-0t64 libayatana-appindicator3-1 xvfb
 
       - name: Build release artifact
         env:
