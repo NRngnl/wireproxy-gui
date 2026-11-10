@@ -133,31 +133,40 @@ func (w *workbench) appearanceControls(c *ui.Context) {
 
 func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 	sel := w.frame.Selected
-	ui.Column(c).Grow(1).Basis(0).MinWidth(0).Padding(narrow2(narrow, 14, 24)).Gap(14).Background(tk.BgContainer).Children(func() {
-		if narrow {
-			ui.Row(c).Children(func() {
-				if action.Button(c.Key("rail"), "← "+tr("Profiles"), action.ButtonProps{Variant: action.Link, Size: w.size()}).Clicked() {
-					w.railOpen = true
+	pad := narrow2(narrow, 14, 24)
+	ui.Column(c).Grow(1).Basis(0).MinWidth(0).Background(tk.BgContainer).Children(func() {
+		ui.Column(c).Padding(pad, pad, 10, pad).Gap(10).Shrink(0).Children(func() {
+			if narrow {
+				ui.Row(c).Children(func() {
+					if action.Button(c.Key("rail"), "← "+tr("Profiles"), action.ButtonProps{Variant: action.Link, Size: w.size()}).Clicked() {
+						w.railOpen = true
+					}
+				})
+			}
+			if sel != nil {
+				w.syncDraft()
+				w.profileHeader(c, tk, sel)
+			}
+		})
+		ui.Scroll(c).Grow(1).Basis(0).MinHeight(0).Children(func() {
+			ui.Column(c).Padding(4, pad, pad, pad).Gap(14).Children(func() {
+				if w.notice != "" && !w.noticeShut {
+					feedback.Alert(c, w.notice, feedback.AlertProps{Type: feedback.Error, Closed: &w.noticeShut})
 				}
+				if sel == nil {
+					display.Empty(c, display.EmptyProps{Icon: lucide.Inbox(), Title: tr("No profiles"),
+						Description: tr("Add a WireGuard or Tailscale profile, then choose a SOCKS5 host and port for that profile.")})
+					return
+				}
+				if w.info != "" && !w.infoShut {
+					feedback.Alert(c, w.info, feedback.AlertProps{Type: feedback.Success, Closed: &w.infoShut})
+				}
+				w.facts(c, tk, sel)
+				w.form(c, tk, sel.Locked)
+				w.actions(c, tk)
+				w.activity(c, tk, sel)
 			})
-		}
-		if w.notice != "" && !w.noticeShut {
-			feedback.Alert(c, w.notice, feedback.AlertProps{Type: feedback.Error, Closed: &w.noticeShut})
-		}
-		if sel == nil {
-			display.Empty(c, display.EmptyProps{Icon: lucide.Inbox(), Title: tr("No profiles"),
-				Description: tr("Add a WireGuard or Tailscale profile, then choose a SOCKS5 host and port for that profile.")})
-			return
-		}
-		w.syncDraft()
-		if w.info != "" && !w.infoShut {
-			feedback.Alert(c, w.info, feedback.AlertProps{Type: feedback.Success, Closed: &w.infoShut})
-		}
-		w.profileHeader(c, tk, sel)
-		w.facts(c, tk, sel)
-		w.form(c, tk, sel.Locked)
-		w.actions(c, tk)
-		w.activity(c, tk, sel)
+		})
 	})
 }
 
