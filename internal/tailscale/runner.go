@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,12 +28,14 @@ import (
 )
 
 var (
-	ErrAlreadyConnected = connection.ErrAlreadyConnected
-	ErrNotTailscale     = connection.ErrNotTailscale
-	ErrNotRunning       = connection.ErrNotRunning
-	ErrInvalidProfileID = connection.ErrInvalidProfileID
-	errCloseNode        = errors.New("close embedded Tailscale node")
-	errNoTailscaleIP    = errors.New("no Tailscale IP available for this node")
+	ErrAlreadyConnected      = connection.ErrAlreadyConnected
+	ErrNotTailscale          = connection.ErrNotTailscale
+	ErrNotRunning            = connection.ErrNotRunning
+	ErrInvalidProfileID      = connection.ErrInvalidProfileID
+	errCloseNode             = errors.New("close embedded Tailscale node")
+	errNoTailscaleIP         = errors.New("no Tailscale IP available for this node")
+	errNoExitNodePeers       = errors.New("embedded Tailscale node connected with no visible peers in netmap")
+	errExitNodeNotAdvertised = errors.New("node is not advertising an exit node")
 )
 
 type Event = connection.Event
@@ -48,6 +51,8 @@ const (
 const (
 	tailscaleStatusPollInterval    = time.Second
 	tailscaleStatusNoticeDelay     = 2 * time.Second
+	exitNodeReadyTimeout           = 5 * time.Second
+	exitNodeReadyPollInterval      = 100 * time.Millisecond
 	tailscaleLoginURLPrefix        = "Tailscale login required: open "
 	tailscaleLoginURLKeyPrefix     = "login-url|"
 	tsnetAuthURLLogPrefix          = "To start this tsnet server, restart with TS_AUTHKEY set, or go to: "
@@ -95,7 +100,9 @@ type Runner struct {
 	newNode     func(profile.Profile, string, func(string, ...any)) (tsNode, error)
 	serveSocks5 func(context.Context, profile.Profile, tsNode, net.Listener) error
 
-	timeouts socksconn.Timeouts
+	timeouts             socksconn.Timeouts
+	exitNodeReadyTimeout time.Duration
+	exitNodeReadyPoll    time.Duration
 
 	mu    sync.Mutex
 	procs map[string]*process
@@ -324,6 +331,11 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 		return err
 	}
 	authLog.emitDeviceApprovedIfNeeded()
+
+	status, err = r.awaitExitNodePeers(procCtx, node, p.TailscaleConfig, status)
+	if err != nil {
+		return fmt.Errorf("configure Tailscale exit node: %w", err)
+	}
 
 	err = configureExitNode(procCtx, node, p.TailscaleConfig, status)
 	if err != nil {
@@ -561,6 +573,77 @@ func tailscaleUserLogMessage(text string) string {
 	return tailscaleUserLogNotice(text).message
 }
 
+func hasReadyExitNodeStatus(exitNode string, status *ipnstate.Status) bool {
+	return status != nil && (len(status.Peer) > 0 || isLocalTailscaleIP(exitNode, status))
+}
+
+func (r *Runner) awaitExitNodePeers(ctx context.Context, node tsNode, cfg profile.TailscaleConfig, status *ipnstate.Status) (*ipnstate.Status, error) {
+	exitNode := strings.TrimSpace(cfg.ExitNode)
+	if cfg.AutoExitNode || exitNode == "" || hasReadyExitNodeStatus(exitNode, status) {
+		return status, nil
+	}
+
+	client, err := node.LocalClient()
+	if err != nil {
+		return nil, err
+	}
+
+	timeout := r.exitNodeReadyTimeout
+	if timeout <= 0 {
+		timeout = exitNodeReadyTimeout
+	}
+	pollInterval := r.exitNodeReadyPoll
+	if pollInterval <= 0 {
+		pollInterval = exitNodeReadyPollInterval
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if status == nil {
+		fresh, statusErr := client.Status(waitCtx)
+		switch {
+		case statusErr == nil:
+			if hasReadyExitNodeStatus(exitNode, fresh) {
+				return fresh, nil
+			}
+		case ctx.Err() != nil:
+			return nil, ctx.Err()
+		case waitCtx.Err() == nil:
+			return nil, statusErr
+		}
+	}
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-waitCtx.Done():
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("%w to resolve exit node %q", errNoExitNodePeers, exitNode)
+		case <-ticker.C:
+			fresh, statusErr := client.Status(waitCtx)
+			if statusErr != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				if waitCtx.Err() != nil {
+					continue
+				}
+				return nil, statusErr
+			}
+			if hasReadyExitNodeStatus(exitNode, fresh) {
+				return fresh, nil
+			}
+		}
+	}
+}
+
 func configureExitNode(ctx context.Context, node tsNode, cfg profile.TailscaleConfig, status *ipnstate.Status) error {
 	client, err := node.LocalClient()
 	if err != nil {
@@ -584,9 +667,16 @@ func configureExitNode(ctx context.Context, node tsNode, cfg profile.TailscaleCo
 	if cfg.AutoExitNode {
 		prefs.AutoExitNode = ipn.AnyExitNode
 	} else if exitNode != "" {
-		if id, ok := exitNodeStableID(exitNode, status); ok {
+		id, matched, err := exitNodeStableID(exitNode, status)
+		if err != nil {
+			return err
+		}
+		if matched {
 			prefs.ExitNodeID = id
 		} else {
+			if status != nil && len(status.Peer) == 0 && status.BackendState == ipn.Running.String() && !isLocalTailscaleIP(exitNode, status) {
+				return fmt.Errorf("%w to resolve exit node %q", errNoExitNodePeers, exitNode)
+			}
 			err = prefs.SetExitNodeIP(exitNode, status)
 			if err != nil {
 				return err
@@ -604,20 +694,32 @@ func configureExitNode(ctx context.Context, node tsNode, cfg profile.TailscaleCo
 	return err
 }
 
-func exitNodeStableID(exitNode string, status *ipnstate.Status) (tailcfg.StableNodeID, bool) {
+func exitNodeStableID(exitNode string, status *ipnstate.Status) (tailcfg.StableNodeID, bool, error) {
 	exitNode = strings.TrimSpace(exitNode)
 	if exitNode == "" || status == nil {
-		return "", false
+		return "", false, nil
 	}
 	for _, peer := range status.Peer {
-		if peer == nil || !peer.ExitNodeOption {
+		if peer == nil || string(peer.ID) != exitNode {
 			continue
 		}
-		if string(peer.ID) == exitNode {
-			return peer.ID, true
+		if !peer.ExitNodeOption {
+			return "", false, fmt.Errorf("%w: %q", errExitNodeNotAdvertised, exitNode)
 		}
+		return peer.ID, true, nil
 	}
-	return "", false
+	return "", false, nil
+}
+
+func isLocalTailscaleIP(exitNode string, status *ipnstate.Status) bool {
+	if status == nil {
+		return false
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(exitNode))
+	if err != nil {
+		return false
+	}
+	return slices.Contains(status.TailscaleIPs, ip)
 }
 
 func exitNodesFromStatus(status *ipnstate.Status) []connection.ExitNode {

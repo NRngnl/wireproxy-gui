@@ -193,6 +193,191 @@ func TestStartLogsMachineAuthApprovalWaitWhileNodeUpIsPending(t *testing.T) {
 	}
 }
 
+func TestStartWaitsForExplicitExitNodePeersBeforeServing(t *testing.T) {
+	runningEmpty := func() *ipnstate.Status {
+		return &ipnstate.Status{
+			BackendState: ipn.Running.String(),
+			TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.2")},
+		}
+	}
+
+	t.Run("applies exit node once peer appears within wait", func(t *testing.T) {
+		runner := NewRunner()
+		runner.stateDir = t.TempDir()
+		listener := newFakeListener()
+
+		readyStatus := runningEmpty()
+		readyStatus.Peer = map[key.NodePublic]*ipnstate.PeerStatus{
+			{}: {
+				ID:             tailcfg.StableNodeID("stable-exit"),
+				ExitNodeOption: true,
+			},
+		}
+		client := &fakeLocalClient{
+			prefs: ipn.NewPrefs(),
+			statusFunc: func(call int) (*ipnstate.Status, error) {
+				if call <= 1 {
+					return runningEmpty(), nil
+				}
+				return readyStatus, nil
+			},
+		}
+		node := &fakeTSNode{client: client, status: runningEmpty()}
+
+		served := make(chan tailcfg.StableNodeID, 1)
+		runner.listen = func(_, _ string) (net.Listener, error) {
+			return listener, nil
+		}
+		runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
+			return node, nil
+		}
+		runner.serveSocks5 = func(ctx context.Context, _ profile.Profile, _ tsNode, ln net.Listener) error {
+			served <- client.lastEdit().ExitNodeID
+			<-ctx.Done()
+			_ = ln.Close()
+			return ctx.Err()
+		}
+
+		p := profile.NewTailscale("tailnet", 18092)
+		p.TailscaleConfig.ExitNode = "stable-exit"
+
+		err := runner.Start(t.Context(), p)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		select {
+		case gotID := <-served:
+			if gotID != tailcfg.StableNodeID("stable-exit") {
+				t.Fatalf("ExitNodeID applied before serving = %q, want stable-exit", gotID)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for serveSocks5")
+		}
+
+		err = runner.StopAllAndWait(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("fails cleanly without serving when peers remain empty", func(t *testing.T) {
+		runner := NewRunner()
+		runner.stateDir = t.TempDir()
+		runner.exitNodeReadyTimeout = 40 * time.Millisecond
+		runner.exitNodeReadyPoll = 10 * time.Millisecond
+		listener := newFakeListener()
+
+		client := &fakeLocalClient{prefs: ipn.NewPrefs(), status: runningEmpty()}
+		node := &fakeTSNode{client: client, status: runningEmpty()}
+		runner.listen = func(_, _ string) (net.Listener, error) {
+			return listener, nil
+		}
+		runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
+			return node, nil
+		}
+		runner.serveSocks5 = func(context.Context, profile.Profile, tsNode, net.Listener) error {
+			t.Fatal("serveSocks5 must not run when exit node peers remain absent")
+			return nil
+		}
+
+		p := profile.NewTailscale("tailnet", 18093)
+		p.TailscaleConfig.ExitNode = "stable-exit"
+
+		err := runner.Start(t.Context(), p)
+		if !errors.Is(err, errNoExitNodePeers) {
+			t.Fatalf("Start error = %v, want errNoExitNodePeers", err)
+		}
+		if runner.Running(p.ID) {
+			t.Fatal("profile should not remain running after exit-node timeout")
+		}
+		if !listener.isClosed() {
+			t.Fatal("listener should be closed after failed exit-node readiness")
+		}
+		if node.closeCalls != 1 {
+			t.Fatalf("node close calls = %d, want 1", node.closeCalls)
+		}
+	})
+
+	t.Run("cancels peer wait without serving", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		runner := NewRunner()
+		runner.stateDir = t.TempDir()
+		runner.exitNodeReadyTimeout = 5 * time.Second
+		runner.exitNodeReadyPoll = 10 * time.Millisecond
+		listener := newFakeListener()
+
+		client := &fakeLocalClient{
+			prefs: ipn.NewPrefs(),
+			statusFunc: func(int) (*ipnstate.Status, error) {
+				cancel()
+				return runningEmpty(), nil
+			},
+		}
+		node := &fakeTSNode{client: client, status: runningEmpty()}
+		runner.listen = func(_, _ string) (net.Listener, error) {
+			return listener, nil
+		}
+		runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
+			return node, nil
+		}
+		runner.serveSocks5 = func(context.Context, profile.Profile, tsNode, net.Listener) error {
+			t.Fatal("serveSocks5 must not run when startup is canceled")
+			return nil
+		}
+
+		p := profile.NewTailscale("tailnet", 18094)
+		p.TailscaleConfig.ExitNode = "stable-exit"
+
+		err := runner.Start(ctx, p)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Start error = %v, want context.Canceled", err)
+		}
+		if !listener.isClosed() {
+			t.Fatal("listener should be closed after canceled startup")
+		}
+	})
+
+	t.Run("preserves advertisement validation for stable ID", func(t *testing.T) {
+		runner := NewRunner()
+		runner.stateDir = t.TempDir()
+		listener := newFakeListener()
+
+		nonExitStatus := runningEmpty()
+		nonExitStatus.Peer = map[key.NodePublic]*ipnstate.PeerStatus{
+			{}: {
+				ID:             tailcfg.StableNodeID("stable-exit"),
+				ExitNodeOption: false,
+			},
+		}
+		client := &fakeLocalClient{prefs: ipn.NewPrefs(), status: nonExitStatus}
+		node := &fakeTSNode{client: client, status: nonExitStatus}
+		runner.listen = func(_, _ string) (net.Listener, error) {
+			return listener, nil
+		}
+		runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
+			return node, nil
+		}
+		runner.serveSocks5 = func(context.Context, profile.Profile, tsNode, net.Listener) error {
+			t.Fatal("serveSocks5 must not run for non-advertising exit node")
+			return nil
+		}
+
+		p := profile.NewTailscale("tailnet", 18095)
+		p.TailscaleConfig.ExitNode = "stable-exit"
+
+		err := runner.Start(t.Context(), p)
+		if !errors.Is(err, errExitNodeNotAdvertised) {
+			t.Fatalf("Start error = %v, want errExitNodeNotAdvertised", err)
+		}
+		if !listener.isClosed() {
+			t.Fatal("listener should be closed after failed exit-node validation")
+		}
+	})
+}
+
 func TestStopAfterNodeReadyBeforeStartedDoesNotEmitStarted(t *testing.T) {
 	runner := NewRunner()
 	listener := newFakeListener()
@@ -2142,14 +2327,18 @@ func (n *fakeTSNode) Close() error {
 }
 
 type fakeLocalClient struct {
+	mu          sync.Mutex
 	prefs       *ipn.Prefs
 	edit        *ipn.MaskedPrefs
 	status      *ipnstate.Status
 	statusCalls int
+	statusFunc  func(int) (*ipnstate.Status, error)
 	editFunc    func()
 }
 
 func (c *fakeLocalClient) GetPrefs(context.Context) (*ipn.Prefs, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.prefs == nil {
 		return ipn.NewPrefs(), nil
 	}
@@ -2157,21 +2346,43 @@ func (c *fakeLocalClient) GetPrefs(context.Context) (*ipn.Prefs, error) {
 }
 
 func (c *fakeLocalClient) EditPrefs(_ context.Context, prefs *ipn.MaskedPrefs) (*ipn.Prefs, error) {
+	c.mu.Lock()
 	copied := *prefs
 	c.edit = &copied
 	c.prefs = prefs.Clone()
-	if c.editFunc != nil {
-		c.editFunc()
+	editFunc := c.editFunc
+	result := c.prefs
+	c.mu.Unlock()
+	if editFunc != nil {
+		editFunc()
 	}
-	return c.prefs, nil
+	return result, nil
 }
 
 func (c *fakeLocalClient) Status(context.Context) (*ipnstate.Status, error) {
+	c.mu.Lock()
 	c.statusCalls++
-	if c.status == nil {
+	call := c.statusCalls
+	statusFunc := c.statusFunc
+	status := c.status
+	c.mu.Unlock()
+	if statusFunc != nil {
+		return statusFunc(call)
+	}
+	if status == nil {
 		return &ipnstate.Status{}, nil
 	}
-	return c.status, nil
+	return status, nil
+}
+
+func (c *fakeLocalClient) lastEdit() *ipn.MaskedPrefs {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.edit == nil {
+		return &ipn.MaskedPrefs{}
+	}
+	copied := *c.edit
+	return &copied
 }
 
 type fakeListener struct {
