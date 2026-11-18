@@ -93,7 +93,7 @@ type Runner struct {
 
 	listen      func(network, address string) (net.Listener, error)
 	newNode     func(profile.Profile, string, func(string, ...any)) (tsNode, error)
-	serveSocks5 func(context.Context, tsNode, net.Listener) error
+	serveSocks5 func(context.Context, profile.Profile, tsNode, net.Listener) error
 
 	timeouts socksconn.Timeouts
 
@@ -350,7 +350,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	r.emit(EventStarted, p, "connected on "+p.BindAddress())
 
 	go func() {
-		err := r.serveSocks5(procCtx, runningNode, listener)
+		err := r.serveSocks5(procCtx, p, runningNode, listener)
 		canceled := procCtx.Err() != nil
 		proc.close()
 		r.removeProcess(p.ID, proc)
@@ -759,7 +759,7 @@ func (r *Runner) processes() []*process {
 	return procs
 }
 
-func (r *Runner) runSocks5(ctx context.Context, node tsNode, listener net.Listener) error {
+func (r *Runner) runSocks5(ctx context.Context, p profile.Profile, node tsNode, listener net.Listener) error {
 	timeouts := r.timeouts.WithDefaults()
 	wrappedLn := socksconn.WrapListener(listener, timeouts.TCPIdle, timeouts.Drain)
 	stop := context.AfterFunc(ctx, func() {
@@ -783,7 +783,11 @@ func (r *Runner) runSocks5(ctx context.Context, node tsNode, listener net.Listen
 		return socksconn.WrapTCP(socksReplyConn{Conn: conn}, timeouts.TCPIdle, timeouts.Drain), nil
 	}
 
-	assocHandle := socksconn.AssociateHandler(ctx, dialFn)
+	assocHandle := socksconn.AssociateHandler(ctx, dialFn, func(err error) {
+		if err != nil {
+			r.emit(EventLog, p, err.Error())
+		}
+	})
 
 	server := socks5.NewServer(
 		socks5.WithResolver(noResolve{}),

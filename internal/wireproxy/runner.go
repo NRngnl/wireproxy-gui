@@ -48,7 +48,7 @@ type Runner struct {
 
 	parseConfig    func(profile.Profile) (*upstream.Configuration, error)
 	startWireguard func(*upstream.Configuration, int) (*upstream.VirtualTun, error)
-	serveSocks5    func(context.Context, *upstream.Socks5Config, *upstream.VirtualTun, net.Listener) error
+	serveSocks5    func(context.Context, profile.Profile, *upstream.Socks5Config, *upstream.VirtualTun, net.Listener) error
 	listen         func(network, address string) (net.Listener, error)
 	dialTun        func(context.Context, *upstream.VirtualTun, string, string) (net.Conn, error)
 	resolveTun     func(context.Context, *upstream.VirtualTun, string) (context.Context, net.IP, error)
@@ -182,7 +182,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	r.emit(EventStarted, p, "connected on "+p.BindAddress())
 
 	go func() {
-		err := r.serveSocks5(procCtx, socksConfig, tun, listener)
+		err := r.serveSocks5(procCtx, p, socksConfig, tun, listener)
 		canceled := procCtx.Err() != nil
 		proc.close()
 		r.removeProcess(p.ID, proc)
@@ -243,7 +243,7 @@ func (r *Runner) processes() []*process {
 	return procs
 }
 
-func (r *Runner) runSocks5(ctx context.Context, config *upstream.Socks5Config, tun *upstream.VirtualTun, listener net.Listener) error {
+func (r *Runner) runSocks5(ctx context.Context, p profile.Profile, config *upstream.Socks5Config, tun *upstream.VirtualTun, listener net.Listener) error {
 	authMethods := []socks5.Authenticator{socks5.NoAuthAuthenticator{}}
 	if config.Username != "" {
 		authMethods = []socks5.Authenticator{
@@ -279,7 +279,11 @@ func (r *Runner) runSocks5(ctx context.Context, config *upstream.Socks5Config, t
 		return socksconn.WrapTCP(conn, timeouts.TCPIdle, timeouts.Drain), nil
 	}
 
-	assocHandle := socksconn.AssociateHandler(ctx, dialFn)
+	assocHandle := socksconn.AssociateHandler(ctx, dialFn, func(err error) {
+		if err != nil {
+			r.emit(EventLog, p, err.Error())
+		}
+	})
 
 	server := socks5.NewServer(
 		socks5.WithDial(dialFn),

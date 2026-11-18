@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -309,7 +310,7 @@ func TestStopAfterWireGuardStartBeforeStartedDoesNotEmitStarted(t *testing.T) {
 func TestStopAllAndWaitWaitsForServeShutdown(t *testing.T) {
 	serveDone := make(chan struct{})
 	runner := newTestRunner()
-	runner.serveSocks5 = func(ctx context.Context, _ *upstream.Socks5Config, _ *upstream.VirtualTun, listener net.Listener) error {
+	runner.serveSocks5 = func(ctx context.Context, _ profile.Profile, _ *upstream.Socks5Config, _ *upstream.VirtualTun, listener net.Listener) error {
 		<-ctx.Done()
 		_ = listener.Close()
 		close(serveDone)
@@ -339,7 +340,7 @@ func TestStopAllAndWaitWaitsForServeShutdown(t *testing.T) {
 func TestStopAllAndWaitReturnsContextError(t *testing.T) {
 	releaseServe := make(chan struct{})
 	runner := newTestRunner()
-	runner.serveSocks5 = func(ctx context.Context, _ *upstream.Socks5Config, _ *upstream.VirtualTun, listener net.Listener) error {
+	runner.serveSocks5 = func(ctx context.Context, _ profile.Profile, _ *upstream.Socks5Config, _ *upstream.VirtualTun, listener net.Listener) error {
 		<-ctx.Done()
 		_ = listener.Close()
 		<-releaseServe
@@ -368,7 +369,7 @@ func TestStopAllAndWaitReturnsContextError(t *testing.T) {
 
 func TestServeErrorEmitsErrorEvent(t *testing.T) {
 	runner := newTestRunner()
-	runner.serveSocks5 = func(context.Context, *upstream.Socks5Config, *upstream.VirtualTun, net.Listener) error {
+	runner.serveSocks5 = func(context.Context, profile.Profile, *upstream.Socks5Config, *upstream.VirtualTun, net.Listener) error {
 		return errServeFailed
 	}
 	p := profile.New("demo", sampleConfig(t), 18084)
@@ -406,7 +407,7 @@ func newTestRunner() *Runner {
 	runner.startWireguard = func(_ *upstream.Configuration, _ int) (*upstream.VirtualTun, error) {
 		return &upstream.VirtualTun{}, nil
 	}
-	runner.serveSocks5 = func(ctx context.Context, _ *upstream.Socks5Config, _ *upstream.VirtualTun, listener net.Listener) error {
+	runner.serveSocks5 = func(ctx context.Context, _ profile.Profile, _ *upstream.Socks5Config, _ *upstream.VirtualTun, listener net.Listener) error {
 		<-ctx.Done()
 		_ = listener.Close()
 		return ctx.Err()
@@ -483,7 +484,7 @@ func TestRunSocks5HalfCloseAndIdleBehavior(t *testing.T) {
 		defer proxyLn.Close()
 
 		go func() {
-			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, &upstream.Socks5Config{}, nil, proxyLn)
 		}()
 
 		clientConn := dialSocks5Connect(t, proxyLn.Addr().String(), targetLn.Addr().(*net.TCPAddr))
@@ -549,7 +550,7 @@ func TestRunSocks5HalfCloseAndIdleBehavior(t *testing.T) {
 		defer proxyLn.Close()
 
 		go func() {
-			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, &upstream.Socks5Config{}, nil, proxyLn)
 		}()
 
 		clientConn := dialSocks5Connect(t, proxyLn.Addr().String(), targetLn.Addr().(*net.TCPAddr))
@@ -616,7 +617,7 @@ func TestRunSocks5UDPAssociateIdleAndRedial(t *testing.T) {
 	}
 
 	go func() {
-		_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+		_ = runner.runSocks5(ctx, profile.Profile{}, &upstream.Socks5Config{}, nil, proxyLn)
 	}()
 
 	controlConn, relayAddr := dialSocks5UDPAssociate(t, proxyLn.Addr().String())
@@ -699,7 +700,7 @@ func TestRunSocks5DialTimeoutAndCancellation(t *testing.T) {
 		}
 
 		go func() {
-			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, &upstream.Socks5Config{}, nil, proxyLn)
 		}()
 
 		var dialer net.Dialer
@@ -769,7 +770,7 @@ func TestRunSocks5DialTimeoutAndCancellation(t *testing.T) {
 		}
 
 		go func() {
-			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, &upstream.Socks5Config{}, nil, proxyLn)
 		}()
 
 		var dialer net.Dialer
@@ -856,7 +857,7 @@ func TestRunSocks5DialTimeoutAndCancellation(t *testing.T) {
 		}
 
 		go func() {
-			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, &upstream.Socks5Config{}, nil, proxyLn)
 		}()
 
 		var dialer net.Dialer
@@ -932,7 +933,7 @@ func TestRunSocks5DialTimeoutAndCancellation(t *testing.T) {
 		}
 
 		go func() {
-			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, &upstream.Socks5Config{}, nil, proxyLn)
 		}()
 
 		var dialer net.Dialer
@@ -1001,7 +1002,7 @@ func TestRunSocks5UDPAssociateLargePayloadsIsolationAndStopCleanup(t *testing.T)
 			return dialer.DialContext(dialCtx, network, addr)
 		}
 		go func() {
-			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, &upstream.Socks5Config{}, nil, proxyLn)
 		}()
 
 		controlConn, relayAddr := dialSocks5UDPAssociate(t, proxyLn.Addr().String())
@@ -1092,7 +1093,7 @@ func TestRunSocks5UDPAssociateLargePayloadsIsolationAndStopCleanup(t *testing.T)
 			return c, nil
 		}
 		go func() {
-			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, &upstream.Socks5Config{}, nil, proxyLn)
 		}()
 
 		controlConn, relayAddr := dialSocks5UDPAssociate(t, proxyLn.Addr().String())
@@ -1321,5 +1322,107 @@ func assertNoStartedEvent(t *testing.T, events <-chan Event) {
 		default:
 			return
 		}
+	}
+}
+
+var errInjectedWGUDPSecret = errors.New("secret-token 192.0.2.88:9999")
+
+func TestStartSocks5UDPAssociateEmitsProfileTaggedEventLog(t *testing.T) {
+	var lc net.ListenConfig
+	realLn, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	targetB, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer targetB.Close()
+
+	badAddr := "192.0.2.88:9999"
+	var dialer net.Dialer
+	runner := NewRunner()
+	runner.listen = func(_, _ string) (net.Listener, error) {
+		return realLn, nil
+	}
+	runner.startWireguard = func(_ *upstream.Configuration, _ int) (*upstream.VirtualTun, error) {
+		return &upstream.VirtualTun{}, nil
+	}
+	runner.dialTun = func(dialCtx context.Context, _ *upstream.VirtualTun, network, addr string) (net.Conn, error) {
+		if addr == badAddr {
+			return nil, fmt.Errorf("%w: %w", syscall.ECONNREFUSED, errInjectedWGUDPSecret)
+		}
+		return dialer.DialContext(dialCtx, network, addr)
+	}
+
+	p := profile.New("WireGuard UDP Log", sampleConfig(t), realLn.Addr().(*net.TCPAddr).Port)
+	err = runner.Start(t.Context(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = runner.StopAllAndWait(stopCtx)
+	}()
+
+	controlConn, relayAddr := dialSocks5UDPAssociate(t, realLn.Addr().String())
+	defer controlConn.Close()
+
+	udpClient, err := net.DialUDP("udp", nil, relayAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udpClient.Close()
+
+	badPkt := []byte{0, 0, 0, 0x01, 192, 0, 2, 88, 0x27, 0x0f, 'x'}
+	_, err = udpClient.Write(badPkt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	func() {
+		deadline := time.After(2 * time.Second)
+		for {
+			select {
+			case event := <-runner.Events():
+				if event.Type == EventError {
+					t.Fatalf("unexpected EventError on UDP drop: %#v", event)
+				}
+				if event.Type != EventLog || !strings.Contains(event.Message, "UDP dial failed") {
+					continue
+				}
+				if event.ProfileID != p.ID || event.ProfileName != p.Name {
+					t.Fatalf("event profile = (%q, %q), want (%q, %q)", event.ProfileID, event.ProfileName, p.ID, p.Name)
+				}
+				if !strings.Contains(event.Message, "connection refused") {
+					t.Fatalf("event message = %q, want connection refused", event.Message)
+				}
+				if strings.Contains(event.Message, badAddr) || strings.Contains(event.Message, "secret-token") {
+					t.Fatalf("event message leaked raw error or endpoint: %q", event.Message)
+				}
+				return
+			case <-deadline:
+				t.Fatal("timed out waiting for profile-tagged EventLog")
+			}
+		}
+	}()
+
+	if !runner.Running(p.ID) {
+		t.Fatal("profile should stay running after UDP drop EventLog")
+	}
+	addrB := targetB.LocalAddr().(*net.UDPAddr)
+	okPkt := []byte{0, 0, 0, 0x01, 127, 0, 0, 1, byte(addrB.Port >> 8), byte(addrB.Port)}
+	okPkt = append(okPkt, "ok-b"...)
+	_, err = udpClient.Write(okPkt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = targetB.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 64)
+	rn, _, err := targetB.ReadFromUDP(buf)
+	if err != nil || string(buf[:rn]) != "ok-b" {
+		t.Fatalf("targetB read = %q, %v", buf[:rn], err)
 	}
 }

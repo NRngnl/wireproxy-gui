@@ -106,6 +106,13 @@ func (d *idleDeadline) recordActivity(now time.Time) {
 	d.mu.Unlock()
 }
 
+func (d *idleDeadline) readDeadlineSnapshot() time.Time {
+	d.mu.Lock()
+	deadline := d.readDeadline
+	d.mu.Unlock()
+	return deadline
+}
+
 func (d *idleDeadline) retryReadDeadline(conn net.Conn, now time.Time) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -385,7 +392,62 @@ func WrapUDP(conn net.Conn, idleTimeout time.Duration) net.Conn {
 
 // Read refreshes the idle deadline and reads from the underlying connection.
 func (c *UDPConn) Read(b []byte) (int, error) {
-	return readWithIdle(c.Conn, &c.idle, b)
+	err := c.idle.beforeRead(c.Conn, time.Now())
+	if err != nil {
+		return 0, err
+	}
+	deadline := c.idle.readDeadlineSnapshot()
+	for {
+		n, readErr := c.Conn.Read(b)
+		if n > 0 || readErr == nil {
+			c.idle.recordActivity(time.Now())
+			return n, readErr
+		}
+		now := time.Now()
+		if !deadline.IsZero() && !now.Before(deadline) && isTimeoutError(readErr) {
+			retry, retryErr := c.idle.retryReadDeadline(c.Conn, now)
+			if retryErr != nil {
+				return 0, retryErr
+			}
+			if retry {
+				deadline = c.idle.readDeadlineSnapshot()
+				continue
+			}
+			return 0, normalizeUDPIdleTimeout(readErr)
+		}
+		return n, readErr
+	}
+}
+
+type idleTimeoutError struct {
+	err error
+}
+
+func (e idleTimeoutError) Error() string {
+	return e.err.Error()
+}
+
+func (e idleTimeoutError) Unwrap() error {
+	return e.err
+}
+
+func (e idleTimeoutError) Is(target error) bool {
+	return target == os.ErrDeadlineExceeded
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	netErr, ok := errors.AsType[net.Error](err)
+	return ok && netErr.Timeout()
+}
+
+func normalizeUDPIdleTimeout(err error) error {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return err
+	}
+	return idleTimeoutError{err: err}
 }
 
 // Write writes to the underlying connection and refreshes the idle deadline.
@@ -472,15 +534,42 @@ var udpBufferPool = sync.Pool{
 	},
 }
 
+type udpBindConn interface {
+	ReadFromUDP(b []byte) (int, *net.UDPAddr, error)
+	WriteTo(b []byte, addr net.Addr) (int, error)
+	LocalAddr() net.Addr
+	Close() error
+}
+
+func defaultListenUDP(laddr *net.UDPAddr) (udpBindConn, error) {
+	return net.ListenUDP("udp", laddr)
+}
+
 // AssociateHandler handles SOCKS5 UDP ASSOCIATE requests with full-size UDP
 // buffers, isolated per-destination expiration and failure recovery, and
-// lifecycle cancellation tied to parentCtx.
+// lifecycle cancellation tied to parentCtx. When onError is non-nil, terminal
+// per-packet relay failures and unexpected read errors are reported with
+// rate-limited, allowlisted reasons.
 func AssociateHandler(
 	parentCtx context.Context,
 	dial func(context.Context, string, string) (net.Conn, error),
+	onError func(error),
+) func(context.Context, io.Writer, *socks5.Request) error {
+	return associateHandler(parentCtx, dial, onError, defaultListenUDP, defaultUDPErrorInterval)
+}
+
+func associateHandler(
+	parentCtx context.Context,
+	dial func(context.Context, string, string) (net.Conn, error),
+	onError func(error),
+	listenUDP func(*net.UDPAddr) (udpBindConn, error),
+	errorInterval time.Duration,
 ) func(context.Context, io.Writer, *socks5.Request) error {
 	if parentCtx == nil {
 		parentCtx = context.Background()
+	}
+	if listenUDP == nil {
+		listenUDP = defaultListenUDP
 	}
 	return func(_ context.Context, writer io.Writer, request *socks5.Request) error {
 		err := parentCtx.Err()
@@ -493,7 +582,7 @@ func AssociateHandler(
 			return fmt.Errorf("%w: %T", errLocalAddrNotTCP, request.LocalAddr)
 		}
 
-		bindLn, err := net.ListenUDP("udp", &net.UDPAddr{IP: tcpAddr.IP, Port: 0})
+		bindLn, err := listenUDP(&net.UDPAddr{IP: tcpAddr.IP, Port: 0})
 		if err != nil {
 			_ = socks5.SendReply(writer, statute.RepServerFailure, nil)
 			return err
@@ -526,10 +615,21 @@ func AssociateHandler(
 				}
 			})
 		}
+		isClosed := func() bool {
+			if parentCtx.Err() != nil {
+				return true
+			}
+			mu.Lock()
+			c := closed
+			mu.Unlock()
+			return c
+		}
 
+		reporter := newUDPErrorReporter(errorInterval, onError)
 		var wg sync.WaitGroup
 		stopAfter := context.AfterFunc(parentCtx, closeAll)
 		defer stopAfter()
+		defer reporter.close()
 		defer wg.Wait()
 		defer closeAll()
 		err = parentCtx.Err()
@@ -599,12 +699,22 @@ func AssociateHandler(
 						copy(replyBuf[:hdrLen], headerCopy)
 						_, writeErr := bindLn.WriteTo(replyBuf[:hdrLen+rn], srcAddr)
 						if writeErr != nil {
-							if errors.Is(writeErr, net.ErrClosed) || parentCtx.Err() != nil {
+							if isClosed() {
+								return
+							}
+							reporter.report(udpOpReplyWrite, writeErr)
+							if errors.Is(writeErr, net.ErrClosed) {
 								return
 							}
 						}
 					}
 					if readErr != nil {
+						if !isClosed() &&
+							!errors.Is(readErr, os.ErrDeadlineExceeded) &&
+							!errors.Is(readErr, io.EOF) &&
+							!errors.Is(readErr, net.ErrClosed) {
+							reporter.report(udpOpTargetRead, readErr)
+						}
 						return
 					}
 				}
@@ -623,7 +733,11 @@ func AssociateHandler(
 			for {
 				n, srcAddr, readErr := bindLn.ReadFromUDP(buf)
 				if readErr != nil {
-					if errors.Is(readErr, io.EOF) || errors.Is(readErr, net.ErrClosed) || parentCtx.Err() != nil {
+					if isClosed() {
+						return
+					}
+					reporter.report(udpOpClientRead, readErr)
+					if errors.Is(readErr, io.EOF) || errors.Is(readErr, net.ErrClosed) {
 						return
 					}
 					continue
@@ -643,19 +757,38 @@ func AssociateHandler(
 				connKey := srcAddr.String() + "--" + pk.DstAddr.String()
 				target, dialErr := getOrDialTarget(connKey, srcAddr, pk.DstAddr.String(), pk.Header())
 				if dialErr != nil {
+					if !isClosed() {
+						reporter.report(udpOpDial, dialErr)
+					}
 					continue
 				}
 
 				_, writeErr := target.conn.Write(pk.Data)
 				if writeErr != nil {
 					removeTarget(connKey, target)
-					if errors.Is(writeErr, net.ErrClosed) && parentCtx.Err() == nil {
-						redialed, retryDialErr := getOrDialTarget(connKey, srcAddr, pk.DstAddr.String(), pk.Header())
-						if retryDialErr == nil {
-							_, retryWriteErr := redialed.conn.Write(pk.Data)
-							if retryWriteErr != nil {
-								removeTarget(connKey, redialed)
-							}
+					if !errors.Is(writeErr, net.ErrClosed) {
+						if !isClosed() {
+							reporter.report(udpOpWrite, writeErr)
+						}
+						continue
+					}
+					if isClosed() {
+						continue
+					}
+
+					redialed, retryDialErr := getOrDialTarget(connKey, srcAddr, pk.DstAddr.String(), pk.Header())
+					if retryDialErr != nil {
+						if !isClosed() {
+							reporter.report(udpOpRedial, retryDialErr)
+						}
+						continue
+					}
+
+					_, retryWriteErr := redialed.conn.Write(pk.Data)
+					if retryWriteErr != nil {
+						removeTarget(connKey, redialed)
+						if !isClosed() {
+							reporter.report(udpOpRetryWrite, retryWriteErr)
 						}
 					}
 				}

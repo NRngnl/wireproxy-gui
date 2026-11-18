@@ -3,6 +3,7 @@ package tailscale
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -70,7 +72,7 @@ func TestStartBindsBeforeNodeUp(t *testing.T) {
 	runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
 		return node, nil
 	}
-	runner.serveSocks5 = func(ctx context.Context, _ tsNode, listener net.Listener) error {
+	runner.serveSocks5 = func(ctx context.Context, _ profile.Profile, _ tsNode, listener net.Listener) error {
 		<-ctx.Done()
 		_ = listener.Close()
 		return ctx.Err()
@@ -159,7 +161,7 @@ func TestStartLogsMachineAuthApprovalWaitWhileNodeUpIsPending(t *testing.T) {
 	runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
 		return node, nil
 	}
-	runner.serveSocks5 = func(ctx context.Context, _ tsNode, listener net.Listener) error {
+	runner.serveSocks5 = func(ctx context.Context, _ profile.Profile, _ tsNode, listener net.Listener) error {
 		<-ctx.Done()
 		_ = listener.Close()
 		return ctx.Err()
@@ -268,7 +270,7 @@ func TestStartPortForwardsBindsEachConfiguredRule(t *testing.T) {
 	runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
 		return node, nil
 	}
-	runner.serveSocks5 = func(ctx context.Context, _ tsNode, listener net.Listener) error {
+	runner.serveSocks5 = func(ctx context.Context, _ profile.Profile, _ tsNode, listener net.Listener) error {
 		<-ctx.Done()
 		_ = listener.Close()
 		return ctx.Err()
@@ -1127,7 +1129,7 @@ func TestRunSocks5PreservesHostnameDestination(t *testing.T) {
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runner.runSocks5(ctx, node, listener)
+		errCh <- runner.runSocks5(ctx, profile.Profile{}, node, listener)
 	}()
 
 	conn := listener.Dial()
@@ -1234,7 +1236,7 @@ func TestRunSocks5HalfCloseAndDialTimeout(t *testing.T) {
 		}
 
 		go func() {
-			_ = runner.runSocks5(ctx, node, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, node, proxyLn)
 		}()
 
 		client, err := dialer.DialContext(ctx, "tcp", proxyLn.Addr().String())
@@ -1305,7 +1307,7 @@ func TestRunSocks5HalfCloseAndDialTimeout(t *testing.T) {
 		}
 
 		go func() {
-			_ = runner.runSocks5(ctx, node, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, node, proxyLn)
 		}()
 
 		var dialer net.Dialer
@@ -1387,7 +1389,7 @@ func TestUDPIdleCleanupAndRedial(t *testing.T) {
 		}
 
 		go func() {
-			_ = runner.runSocks5(ctx, node, proxyLn)
+			_ = runner.runSocks5(ctx, profile.Profile{}, node, proxyLn)
 		}()
 
 		controlConn, err := dialer.DialContext(ctx, "tcp", proxyLn.Addr().String())
@@ -1608,7 +1610,7 @@ func TestRunSocks5RoutesUDPAssociateThroughNode(t *testing.T) {
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runner.runSocks5(ctx, node, tcpListener)
+		errCh <- runner.runSocks5(ctx, profile.Profile{}, node, tcpListener)
 	}()
 
 	controlConn, err := dialer.DialContext(ctx, "tcp", tcpListener.Addr().String())
@@ -2351,3 +2353,131 @@ func (c *fakePacketConn) LocalAddr() net.Addr {
 func (c *fakePacketConn) SetDeadline(_ time.Time) error      { return nil }
 func (c *fakePacketConn) SetReadDeadline(_ time.Time) error  { return nil }
 func (c *fakePacketConn) SetWriteDeadline(_ time.Time) error { return nil }
+
+var errInjectedTSUDPSecret = errors.New("secret-token 192.0.2.77:8888")
+
+func TestStartSocks5UDPAssociateEmitsProfileTaggedEventLog(t *testing.T) {
+	var lc net.ListenConfig
+	realLn, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	targetB, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer targetB.Close()
+
+	badAddr := "192.0.2.77:8888"
+	var dialer net.Dialer
+	runner := NewRunner()
+	runner.listen = func(_, _ string) (net.Listener, error) {
+		return realLn, nil
+	}
+	runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
+		return &fakeTSNode{
+			client: &fakeLocalClient{prefs: ipn.NewPrefs(), status: &ipnstate.Status{}},
+			dialFunc: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+				if addr == badAddr {
+					return nil, fmt.Errorf("%w: %w", syscall.ECONNREFUSED, errInjectedTSUDPSecret)
+				}
+				return dialer.DialContext(dialCtx, network, addr)
+			},
+		}, nil
+	}
+
+	p := profile.NewTailscale("Tailnet UDP Log", realLn.Addr().(*net.TCPAddr).Port)
+	err = runner.Start(t.Context(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = runner.StopAllAndWait(stopCtx)
+	}()
+
+	controlConn, err := dialer.DialContext(t.Context(), "tcp", realLn.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlConn.Close()
+	_ = controlConn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	_, err = controlConn.Write([]byte{0x05, 0x01, 0x00})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.ReadFull(controlConn, make([]byte, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = controlConn.Write([]byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assocReply := make([]byte, 10)
+	_, err = io.ReadFull(controlConn, assocReply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = controlConn.SetDeadline(time.Time{})
+
+	relayPort := int(assocReply[8])<<8 | int(assocReply[9])
+	udpClient, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: relayPort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udpClient.Close()
+
+	badPkt := []byte{0, 0, 0, 0x01, 192, 0, 2, 77, 0x22, 0xb8, 'x'}
+	_, err = udpClient.Write(badPkt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	func() {
+		deadline := time.After(2 * time.Second)
+		for {
+			select {
+			case event := <-runner.Events():
+				if event.Type == EventError {
+					t.Fatalf("unexpected EventError on UDP drop: %#v", event)
+				}
+				if event.Type != EventLog || !strings.Contains(event.Message, "UDP dial failed") {
+					continue
+				}
+				if event.ProfileID != p.ID || event.ProfileName != p.Name {
+					t.Fatalf("event profile = (%q, %q), want (%q, %q)", event.ProfileID, event.ProfileName, p.ID, p.Name)
+				}
+				if !strings.Contains(event.Message, "connection refused") {
+					t.Fatalf("event message = %q, want connection refused", event.Message)
+				}
+				if strings.Contains(event.Message, badAddr) || strings.Contains(event.Message, "secret-token") {
+					t.Fatalf("event message leaked raw error or endpoint: %q", event.Message)
+				}
+				return
+			case <-deadline:
+				t.Fatal("timed out waiting for profile-tagged EventLog")
+			}
+		}
+	}()
+
+	if !runner.Running(p.ID) {
+		t.Fatal("profile should stay running after UDP drop EventLog")
+	}
+	addrB := targetB.LocalAddr().(*net.UDPAddr)
+	okPkt := []byte{0, 0, 0, 0x01, 127, 0, 0, 1, byte(addrB.Port >> 8), byte(addrB.Port)}
+	okPkt = append(okPkt, "ok-b"...)
+	_, err = udpClient.Write(okPkt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = targetB.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 64)
+	rn, _, err := targetB.ReadFromUDP(buf)
+	if err != nil || string(buf[:rn]) != "ok-b" {
+		t.Fatalf("targetB read = %q, %v", buf[:rn], err)
+	}
+}
