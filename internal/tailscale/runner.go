@@ -1310,7 +1310,7 @@ func (r *Runner) removeProcess(profileID string, proc *process) {
 }
 
 func (r *Runner) emit(eventType EventType, p profile.Profile, message string) {
-	if strings.TrimSpace(message) == "" {
+	if strings.TrimSpace(message) == "" && eventType != EventLocalForwardChanged {
 		return
 	}
 	event := connection.Event{

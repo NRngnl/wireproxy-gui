@@ -121,11 +121,34 @@ func (s *Service) editLocalForwards(ctx context.Context, profileID string, edit 
 	}
 	s.profiles = next
 	s.appendLogLocked(profileID, time.Now(), "saved local forwards")
-	running := s.statuses[profileID] == StatusRunning && s.runtime != nil
 	s.mu.Unlock()
-	if running {
-		err = s.runtime.ApplyLocalForwards(ctx, profileID, slices.Clone(updated.LocalForwards))
-	}
+	err = s.syncLocalForwards(ctx, profileID)
 	s.notify(Change{ProfileID: profileID})
 	return err
+}
+
+func (s *Service) syncLocalForwards(ctx context.Context, profileID string) error {
+	if s.runtime == nil {
+		return nil
+	}
+	s.forwards.Lock()
+	defer s.forwards.Unlock()
+	s.mu.Lock()
+	item, ok := s.profileLocked(profileID)
+	running := ok && s.statuses[profileID] == StatusRunning
+	s.mu.Unlock()
+	if !running {
+		return nil
+	}
+	return s.runtime.ApplyLocalForwards(ctx, profileID, item.LocalForwards)
+}
+
+func (s *Service) profileLocked(profileID string) (profile.Profile, bool) {
+	index := s.profileIndexLocked(profileID)
+	if index < 0 {
+		return profile.Profile{}, false
+	}
+	item := s.profiles[index]
+	item.LocalForwards = slices.Clone(item.LocalForwards)
+	return item, true
 }

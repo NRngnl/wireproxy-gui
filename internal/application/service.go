@@ -115,6 +115,7 @@ type Service struct {
 	logs     map[string][]LogEntry
 	starts   map[string]*pendingStart
 	changes  chan Change
+	forwards sync.Mutex
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -179,7 +180,9 @@ func (s *Service) Profile(profileID string) (profile.Profile, bool) {
 	if index < 0 {
 		return profile.Profile{}, false
 	}
-	return s.profiles[index], true
+	item := s.profiles[index]
+	item.LocalForwards = slices.Clone(item.LocalForwards)
+	return item, true
 }
 
 func (s *Service) Status(profileID string) Status {
@@ -350,7 +353,7 @@ func (s *Service) Export(profileIDs []string) ([]byte, error) {
 				s.mu.Unlock()
 				return nil, ErrProfileNotFound
 			}
-			selected = append(selected, s.profiles[index])
+			selected = append(selected, cloneProfiles(s.profiles[index : index+1])[0])
 		}
 	}
 	s.mu.Unlock()
@@ -379,7 +382,7 @@ func (s *Service) connect(profileID string, operation Operation, checkConflict b
 		s.mu.Unlock()
 		return ErrProfileNotFound
 	}
-	item := s.profiles[index]
+	item := cloneProfiles(s.profiles[index : index+1])[0]
 	if checkConflict {
 		err := s.runningBindConflictLocked(item)
 		if err != nil {
@@ -707,10 +710,10 @@ func (s *Service) handleRuntimeEvent(event connection.Event) {
 	if event.Message != "" {
 		s.appendLogLocked(event.ProfileID, event.At, event.Message)
 	}
-	rules := slices.Clone(s.profiles[s.profileIndexLocked(event.ProfileID)].LocalForwards)
 	s.mu.Unlock()
-	if event.Type == connection.EventStarted && s.runtime != nil {
-		_ = s.runtime.ApplyLocalForwards(s.ctx, event.ProfileID, rules)
+	if event.Type == connection.EventStarted {
+		_ = s.syncLocalForwards(s.ctx, event.ProfileID)
+		s.notify(Change{ProfileID: event.ProfileID, RuntimeEvent: connection.EventLocalForwardChanged})
 	}
 	s.notify(Change{ProfileID: event.ProfileID, RuntimeEvent: event.Type})
 	if authErr != nil {
