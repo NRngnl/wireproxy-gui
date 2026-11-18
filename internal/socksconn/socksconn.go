@@ -262,7 +262,7 @@ func readWithIdle(conn net.Conn, idle *idleDeadline, b []byte) (int, error) {
 			idle.recordActivity(time.Now())
 			return n, readErr
 		}
-		if errors.Is(readErr, os.ErrDeadlineExceeded) {
+		if isTimeoutError(readErr) {
 			retry, retryErr := idle.retryReadDeadline(conn, time.Now())
 			if retryErr != nil {
 				return 0, retryErr
@@ -296,7 +296,7 @@ func writeWithIdle(conn net.Conn, idle *idleDeadline, b []byte) (int, error) {
 			start = time.Now()
 			idle.recordActivity(start)
 		}
-		if errors.Is(writeErr, os.ErrDeadlineExceeded) {
+		if isTimeoutError(writeErr) {
 			retry, retryErr := idle.retryWriteDeadline(conn, start, time.Now())
 			if retryErr != nil {
 				return total, retryErr
@@ -348,6 +348,7 @@ func (c *Conn) Write(b []byte) (int, error) {
 
 // Close closes the underlying connection and runs any listener tracking cleanup once.
 func (c *Conn) Close() error {
+	_ = c.idle.clear(c.Conn)
 	c.closeOnce.Do(func() {
 		if c.onClose != nil {
 			c.onClose()
