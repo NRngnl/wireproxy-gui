@@ -34,6 +34,7 @@ type LocalForwardsPanel struct {
 	Running   bool
 	Err       string
 
+	Busy    bool
 	cursor  int
 	form    *huh.Form
 	confirm *Confirm
@@ -103,6 +104,9 @@ func (p *LocalForwardsPanel) buildForm() {
 
 // HandleKey routes a key press and reports the action for the owner to perform.
 func (p *LocalForwardsPanel) HandleKey(msg tea.KeyMsg) (LocalForwardsAction, tea.Cmd) {
+	if p.Busy {
+		return LocalForwardsNone, nil
+	}
 	switch {
 	case p.confirm != nil:
 		resolved, confirmed := p.confirm.HandleKey(msg)
@@ -182,6 +186,12 @@ func (p *LocalForwardsPanel) submit() LocalForwardsAction {
 	return LocalForwardsAdd
 }
 
+// ReopenForm rebuilds the add/edit form with the user's input after a failed save.
+func (p *LocalForwardsPanel) ReopenForm() tea.Cmd {
+	p.buildForm()
+	return p.form.Init()
+}
+
 // CloseForm drops the add/edit form after a successful save.
 func (p *LocalForwardsPanel) CloseForm() { p.form, p.editing = nil, nil }
 
@@ -193,6 +203,9 @@ func (p *LocalForwardsPanel) status(rule profile.LocalForward) string {
 		if s.Key == rule.Key() {
 			if s.Status == connection.LocalForwardError {
 				return "error: " + s.Err
+			}
+			if s.Err != "" {
+				return "active, last dial failed: " + s.Err
 			}
 			return "active"
 		}

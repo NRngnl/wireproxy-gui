@@ -44,6 +44,7 @@ func (m *model) updateForwards(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.closeModal()
 		return m, nil
 	}
+	panel.Busy = true
 	id, rule, editing := panel.ProfileID, panel.Rule(), panel.Editing()
 	selected, hasSelected := panel.Selected()
 	core := m.core
@@ -74,17 +75,22 @@ type forwardResultMsg struct {
 	err       error
 }
 
-func (m *model) applyForwardResult(msg forwardResultMsg) {
+func (m *model) applyForwardResult(msg forwardResultMsg) tea.Cmd {
 	if m.mode != modeForwards || m.forwards == nil || m.forwards.ProfileID != msg.profileID {
-		return
+		return nil
 	}
+	m.forwards.Busy = false
 	if msg.err != nil {
 		m.forwards.Err = msg.err.Error()
-		return
+		if msg.action == screens.LocalForwardsAdd || msg.action == screens.LocalForwardsUpdate {
+			return m.forwards.ReopenForm()
+		}
+		return nil
 	}
 	m.forwards.Err = ""
 	if msg.action == screens.LocalForwardsAdd || msg.action == screens.LocalForwardsUpdate {
 		m.forwards.CloseForm()
 	}
 	m.refreshForwards()
+	return nil
 }

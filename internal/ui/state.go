@@ -44,6 +44,7 @@ type workbench struct {
 	core       Application
 	window     *mygo.Window
 	selectedID atomic.Value
+	lfSeq      int
 	wake       chan struct{}
 	frame      presentationFrame
 	notice     string

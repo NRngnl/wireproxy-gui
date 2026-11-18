@@ -26,7 +26,12 @@ func (w *workbench) submitForward(profileID string) {
 		w.lf.Err = "A forward with this protocol and listen address already exists"
 		return
 	}
+	if w.lf.Busy {
+		return
+	}
 	w.lf.Err, w.lf.Busy = "", true
+	w.lfSeq++
+	seq := w.lfSeq
 	go func() {
 		var err error
 		if editing != nil {
@@ -35,6 +40,9 @@ func (w *workbench) submitForward(profileID string) {
 			err = w.core.AddLocalForward(w.ctx(), profileID, rule)
 		}
 		w.window.Update(func() {
+			if seq != w.lfSeq || w.selectedProfileID() != profileID {
+				return
+			}
 			w.lf.Busy = false
 			if err != nil {
 				w.lf.Err = displayErrorText("Local forward", err)
@@ -43,4 +51,9 @@ func (w *workbench) submitForward(profileID string) {
 			w.lf = localForwardForm{}
 		})
 	}()
+}
+
+func (w *workbench) selectedProfileID() string {
+	id, _ := w.selectedID.Load().(string)
+	return id
 }

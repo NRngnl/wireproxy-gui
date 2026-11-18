@@ -13,9 +13,15 @@ func (w *workbench) localForwardForm(c *ui.Context, tk *theme.Tokens, sel *selec
 	if !f.Fetched {
 		f.Fetched = true
 		id := sel.Profile.ID
+		w.lfSeq++
+		seq := w.lfSeq
 		go func() {
 			names := w.core.LocalForwardTargets(id)
-			w.window.Update(func() { w.lf.Targets = names })
+			w.window.Update(func() {
+				if seq == w.lfSeq && w.selectedProfileID() == id {
+					w.lf.Targets = names
+				}
+			})
 		}()
 	}
 	box := ui.Column(c).Gap(12).Padding(12).Radius(tk.BorderRadius).Border(1, tk.BorderSecondary)

@@ -300,8 +300,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case forwardResultMsg:
-		m.applyForwardResult(msg)
-		return m, nil
+		return m, m.applyForwardResult(msg)
 
 	case changeMsg:
 		m.refreshList()
