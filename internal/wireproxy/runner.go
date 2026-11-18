@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
+	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 	socks5 "github.com/things-go/go-socks5"
 	"github.com/things-go/go-socks5/bufferpool"
 	upstream "github.com/windtf/wireproxy"
@@ -22,7 +25,12 @@ var (
 	ErrAlreadyConnected = connection.ErrAlreadyConnected
 	ErrConfigInvalid    = errors.New("wireproxy config validation failed")
 	ErrSocks5Missing    = errors.New("wireproxy config does not contain a SOCKS5 listener")
+
+	errInvalidPersistentKeepalive   = errors.New("PersistentKeepalive must be between 0 and 65535")
+	errDuplicatePersistentKeepalive = errors.New("duplicate PersistentKeepalive in [Peer]")
 )
+
+const defaultPersistentKeepalive = 25
 
 type EventType = connection.EventType
 
@@ -40,8 +48,12 @@ type Runner struct {
 
 	parseConfig    func(profile.Profile) (*upstream.Configuration, error)
 	startWireguard func(*upstream.Configuration, int) (*upstream.VirtualTun, error)
-	serveSocks5    func(context.Context, *upstream.Socks5Config, *upstream.VirtualTun, net.Listener) error
+	serveSocks5    func(context.Context, profile.Profile, *upstream.Socks5Config, *upstream.VirtualTun, net.Listener) error
 	listen         func(network, address string) (net.Listener, error)
+	dialTun        func(context.Context, *upstream.VirtualTun, string, string) (net.Conn, error)
+	resolveTun     func(context.Context, *upstream.VirtualTun, string) (context.Context, net.IP, error)
+
+	timeouts socksconn.Timeouts
 
 	mu    sync.Mutex
 	procs map[string]*process
@@ -65,6 +77,13 @@ func NewRunner() *Runner {
 		parseConfig:    parseProfileConfig,
 		startWireguard: upstream.StartWireguard,
 		listen:         net.Listen,
+		dialTun: func(ctx context.Context, tun *upstream.VirtualTun, network, addr string) (net.Conn, error) {
+			return tun.Tnet.DialContext(ctx, network, addr)
+		},
+		resolveTun: func(ctx context.Context, tun *upstream.VirtualTun, name string) (context.Context, net.IP, error) {
+			return tun.Resolve(ctx, name)
+		},
+		timeouts: socksconn.Timeouts{}.WithDefaults(),
 	}
 	r.serveSocks5 = r.runSocks5
 	return r
@@ -163,7 +182,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	r.emit(EventStarted, p, "connected on "+p.BindAddress())
 
 	go func() {
-		err := r.serveSocks5(procCtx, socksConfig, tun, listener)
+		err := r.serveSocks5(procCtx, p, socksConfig, tun, listener)
 		canceled := procCtx.Err() != nil
 		proc.close()
 		r.removeProcess(p.ID, proc)
@@ -224,7 +243,7 @@ func (r *Runner) processes() []*process {
 	return procs
 }
 
-func (r *Runner) runSocks5(_ context.Context, config *upstream.Socks5Config, tun *upstream.VirtualTun, listener net.Listener) error {
+func (r *Runner) runSocks5(ctx context.Context, p profile.Profile, config *upstream.Socks5Config, tun *upstream.VirtualTun, listener net.Listener) error {
 	authMethods := []socks5.Authenticator{socks5.NoAuthAuthenticator{}}
 	if config.Username != "" {
 		authMethods = []socks5.Authenticator{
@@ -234,13 +253,93 @@ func (r *Runner) runSocks5(_ context.Context, config *upstream.Socks5Config, tun
 		}
 	}
 
+	timeouts := r.timeouts.WithDefaults()
+	wrappedLn := socksconn.WrapListener(listener, timeouts.TCPIdle, timeouts.Drain)
+	stop := context.AfterFunc(ctx, func() {
+		_ = wrappedLn.Close()
+	})
+	defer stop()
+
+	var assocWG sync.WaitGroup
+	defer assocWG.Wait()
+
+	dialFn := func(reqCtx context.Context, network, addr string) (net.Conn, error) {
+		if resolveCancel, ok := reqCtx.Value(resolveCancelKey{}).(context.CancelFunc); ok {
+			defer resolveCancel()
+		}
+		dialCtx, cancel := socksconn.DialContext(ctx, reqCtx, timeouts.Dial)
+		defer cancel()
+		conn, err := r.dialTun(dialCtx, tun, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(network, "udp") {
+			return socksconn.WrapUDP(conn, timeouts.UDPIdle), nil
+		}
+		return socksconn.WrapTCP(conn, timeouts.TCPIdle, timeouts.Drain), nil
+	}
+
+	assocHandle := socksconn.AssociateHandler(ctx, dialFn, func(err error) {
+		if err != nil {
+			r.emit(EventLog, p, err.Error())
+		}
+	})
+
 	server := socks5.NewServer(
-		socks5.WithDial(tun.Tnet.DialContext),
-		socks5.WithResolver(tun),
+		socks5.WithDial(dialFn),
+		socks5.WithAssociateHandle(func(reqCtx context.Context, writer io.Writer, request *socks5.Request) error {
+			if resolveCancel, ok := reqCtx.Value(resolveCancelKey{}).(context.CancelFunc); ok {
+				resolveCancel()
+			}
+			assocWG.Add(1)
+			defer assocWG.Done()
+			return assocHandle(reqCtx, writer, request)
+		}),
+		socks5.WithAssociateMiddleware(func(_ context.Context, writer io.Writer, _ *socks5.Request) error {
+			if c, ok := writer.(interface{ ClearIdleTimeout() error }); ok {
+				return c.ClearIdleTimeout()
+			}
+			return nil
+		}),
+		socks5.WithBindMiddleware(func(reqCtx context.Context, _ io.Writer, _ *socks5.Request) error {
+			if resolveCancel, ok := reqCtx.Value(resolveCancelKey{}).(context.CancelFunc); ok {
+				resolveCancel()
+			}
+			return nil
+		}),
+		socks5.WithResolver(boundedResolver{
+			parentCtx: ctx,
+			timeout:   timeouts.Dial,
+			resolve: func(resolveCtx context.Context, name string) (context.Context, net.IP, error) {
+				return r.resolveTun(resolveCtx, tun, name)
+			},
+		}),
 		socks5.WithAuthMethods(authMethods),
-		socks5.WithBufferPool(bufferpool.NewPool(256*1024)),
+		socks5.WithBufferPool(bufferpool.NewPool(socksconn.BufferSize)),
 	)
-	return server.Serve(listener)
+	return server.Serve(wrappedLn)
+}
+
+type resolveCancelKey struct{}
+
+type boundedResolver struct {
+	parentCtx context.Context
+	timeout   time.Duration
+	resolve   func(context.Context, string) (context.Context, net.IP, error)
+}
+
+func (r boundedResolver) Resolve(reqCtx context.Context, name string) (context.Context, net.IP, error) {
+	dialCtx, cancel := socksconn.DialContext(r.parentCtx, reqCtx, r.timeout)
+	ctxWithCancel := context.WithValue(dialCtx, resolveCancelKey{}, cancel)
+	resolvedCtx, ip, err := r.resolve(ctxWithCancel, name)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	if resolvedCtx == nil {
+		resolvedCtx = ctxWithCancel
+	}
+	return resolvedCtx, ip, nil
 }
 
 func (r *Runner) removeProcess(profileID string, proc *process) {
@@ -330,7 +429,8 @@ func parseProfileConfig(p profile.Profile) (*upstream.Configuration, error) {
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 
-	_, err = tmp.WriteString(wireproxyConfig(p))
+	cfgText := wireproxyConfig(p)
+	_, err = tmp.WriteString(cfgText)
 	if err != nil {
 		_ = tmp.Close()
 		return nil, err
@@ -340,12 +440,120 @@ func parseProfileConfig(p profile.Profile) (*upstream.Configuration, error) {
 		return nil, err
 	}
 
-	return upstream.ParseConfig(tmpPath)
+	conf, err := upstream.ParseConfig(tmpPath)
+	if err != nil {
+		return nil, err
+	}
+
+	wgText := cfgText
+	if wgPath, ok := findRootINIKey(cfgText, "WGConfig"); ok {
+		if filepath.Base(wgPath) == wgPath {
+			wgPath = filepath.Join(filepath.Dir(tmpPath), wgPath)
+		}
+		wgBytes, readErr := os.ReadFile(wgPath)
+		if readErr != nil {
+			return nil, readErr
+		}
+		wgText = string(wgBytes)
+	}
+
+	err = applyAndValidatePeerKeepalives(wgText, conf.Device.Peers)
+	if err != nil {
+		return nil, err
+	}
+	return conf, nil
 }
 
 func wireproxyConfig(p profile.Profile) string {
 	base := stripSection(p.WireGuardConfig, "Socks5")
 	return fmt.Sprintf("%s\n\n[Socks5]\nBindAddress = %s\n", strings.TrimSpace(base), p.BindAddress())
+}
+
+func applyAndValidatePeerKeepalives(wgText string, peers []upstream.PeerConfig) error {
+	counts := peerKeepaliveCounts(wgText)
+	if len(counts) != len(peers) {
+		return errInvalidPersistentKeepalive
+	}
+	for i, count := range counts {
+		switch {
+		case count == 0:
+			peers[i].KeepAlive = defaultPersistentKeepalive
+		case count > 1:
+			return fmt.Errorf("%w (peer %d)", errDuplicatePersistentKeepalive, i+1)
+		case peers[i].KeepAlive < 0 || peers[i].KeepAlive > 65535:
+			return fmt.Errorf("%w: %d", errInvalidPersistentKeepalive, peers[i].KeepAlive)
+		}
+	}
+	return nil
+}
+
+func peerKeepaliveCounts(text string) []int {
+	var counts []int
+	inPeer := false
+	for line := range strings.SplitSeq(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if section, ok := sectionHeaderName(trimmed); ok {
+			inPeer = section == "peer"
+			if inPeer {
+				counts = append(counts, 0)
+			}
+			continue
+		}
+		if !inPeer {
+			continue
+		}
+		key, _, ok := parseINILine(trimmed)
+		if ok && strings.EqualFold(key, "PersistentKeepalive") {
+			counts[len(counts)-1]++
+		}
+	}
+	return counts
+}
+
+func findRootINIKey(text, targetKey string) (string, bool) {
+	for line := range strings.SplitSeq(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if _, ok := sectionHeaderName(trimmed); ok {
+			break
+		}
+		key, val, ok := parseINILine(trimmed)
+		if ok && strings.EqualFold(key, targetKey) {
+			return val, true
+		}
+	}
+	return "", false
+}
+
+func parseINILine(trimmed string) (string, string, bool) {
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
+		return "", "", false
+	}
+	idx := strings.IndexAny(trimmed, "=:")
+	if idx <= 0 {
+		return "", "", false
+	}
+	key := stripSurroundingQuotes(strings.TrimSpace(trimmed[:idx]))
+	val := cleanINIValue(strings.TrimSpace(trimmed[idx+1:]))
+	return key, val, key != ""
+}
+
+func cleanINIValue(val string) string {
+	if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') {
+		if end := strings.IndexByte(val[1:], val[0]); end >= 0 && strings.TrimSpace(val[end+2:]) == "" {
+			return val[1 : end+1]
+		}
+	}
+	if i := strings.IndexAny(val, "#;"); i >= 0 {
+		val = strings.TrimSpace(val[:i])
+	}
+	return stripSurroundingQuotes(val)
+}
+
+func stripSurroundingQuotes(s string) string {
+	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'' || s[0] == '`') && s[len(s)-1] == s[0] {
+		return s[1 : len(s)-1]
+	}
+	return s
 }
 
 func stripSection(text, sectionName string) string {
@@ -354,9 +562,7 @@ func stripSection(text, sectionName string) string {
 	dropping := false
 	for line := range strings.SplitSeq(text, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.Contains(trimmed, "]") {
-			end := strings.Index(trimmed, "]")
-			current := strings.ToLower(strings.TrimSpace(trimmed[1:end]))
+		if current, ok := sectionHeaderName(trimmed); ok {
 			dropping = current == target
 		}
 		if !dropping {
@@ -364,6 +570,14 @@ func stripSection(text, sectionName string) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+func sectionHeaderName(trimmed string) (string, bool) {
+	if !strings.HasPrefix(trimmed, "[") || !strings.Contains(trimmed, "]") {
+		return "", false
+	}
+	end := strings.Index(trimmed, "]")
+	return strings.ToLower(strings.TrimSpace(trimmed[1:end])), true
 }
 
 func findSocks5Config(conf *upstream.Configuration) (*upstream.Socks5Config, error) {
