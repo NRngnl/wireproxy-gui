@@ -46,6 +46,9 @@ type Runtime interface {
 	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
 	UpdateExitNode(context.Context, string, profile.TailscaleConfig) error
 	Logout(context.Context, string) error
+	ApplyLocalForwards(context.Context, string, []profile.LocalForward) error
+	RetryLocalForward(profileID string, key profile.LocalForwardKey)
+	LocalForwardStates(profileID string) []connection.LocalForwardState
 	Start(context.Context, profile.Profile) error
 	Stop(profileID string) bool
 	StopAll()

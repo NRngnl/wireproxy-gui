@@ -244,6 +244,14 @@ func (b *testBackend) Logout(_ context.Context, profileID string) error {
 	return b.logoutErr
 }
 
+func (*testBackend) ApplyLocalForwards(context.Context, string, []profile.LocalForward) error {
+	return nil
+}
+
+func (*testBackend) RetryLocalForward(string, profile.LocalForwardKey) {}
+
+func (*testBackend) LocalForwardStates(string) []connection.LocalForwardState { return nil }
+
 func (b *testBackend) Start(_ context.Context, p profile.Profile) error {
 	b.starts = append(b.starts, p)
 	b.running[p.ID] = true

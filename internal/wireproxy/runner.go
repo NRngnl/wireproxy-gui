@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
+	"github.com/NRngnl/wireproxy-gui/internal/localforward"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
 	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 	socks5 "github.com/things-go/go-socks5"
@@ -35,10 +36,11 @@ const defaultPersistentKeepalive = 25
 type EventType = connection.EventType
 
 const (
-	EventLog     = connection.EventLog
-	EventStarted = connection.EventStarted
-	EventStopped = connection.EventStopped
-	EventError   = connection.EventError
+	EventLog                 = connection.EventLog
+	EventStarted             = connection.EventStarted
+	EventStopped             = connection.EventStopped
+	EventError               = connection.EventError
+	EventLocalForwardChanged = connection.EventLocalForwardChanged
 )
 
 type Event = connection.Event
@@ -68,6 +70,7 @@ type process struct {
 	closed   bool
 	listener net.Listener
 	tun      *upstream.VirtualTun
+	forwards *localforward.Set
 }
 
 func NewRunner() *Runner {
@@ -178,6 +181,10 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	if !proc.commitStart() {
 		return context.Canceled
 	}
+	proc.startLocalForwards(procCtx, tun, r.timeouts, p.LocalForwards, func() {
+		r.emit(EventLocalForwardChanged, p, "")
+	})
+
 	started = true
 	r.emit(EventStarted, p, "connected on "+p.BindAddress())
 
@@ -406,9 +413,13 @@ func (p *process) close() {
 	cancel := p.cancel
 	listener := p.listener
 	tun := p.tun
+	forwards := p.forwards
 	p.mu.Unlock()
 
 	cancel()
+	if forwards != nil {
+		forwards.Close()
+	}
 	if listener != nil {
 		_ = listener.Close()
 	}

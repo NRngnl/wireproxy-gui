@@ -17,6 +17,9 @@ type Backend interface {
 	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
 	UpdateExitNode(context.Context, string, profile.TailscaleConfig) error
 	Logout(context.Context, string) error
+	ApplyLocalForwards(context.Context, string, []profile.LocalForward) error
+	RetryLocalForward(profileID string, key profile.LocalForwardKey)
+	LocalForwardStates(profileID string) []connection.LocalForwardState
 	Start(context.Context, profile.Profile) error
 	Stop(profileID string) bool
 	StopAll()
@@ -109,6 +112,31 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 		return err
 	}
 	return nil
+}
+
+func (r *Runner) ApplyLocalForwards(ctx context.Context, profileID string, next []profile.LocalForward) error {
+	return r.owner(profileID).ApplyLocalForwards(ctx, profileID, next)
+}
+
+func (r *Runner) RetryLocalForward(profileID string, key profile.LocalForwardKey) {
+	r.owner(profileID).RetryLocalForward(profileID, key)
+}
+
+func (r *Runner) LocalForwardStates(profileID string) []connection.LocalForwardState {
+	return r.owner(profileID).LocalForwardStates(profileID)
+}
+
+func (r *Runner) owner(profileID string) Backend {
+	r.mu.Lock()
+	kind, ok := r.backing[profileID]
+	r.mu.Unlock()
+	if ok {
+		return r.backendByKind(kind)
+	}
+	if r.tailscale.Running(profileID) {
+		return r.tailscale
+	}
+	return r.wireguard
 }
 
 func (r *Runner) Stop(profileID string) bool {

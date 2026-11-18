@@ -649,6 +649,23 @@ type fakeRuntime struct {
 	logoutCalls         []string
 	logoutErr           error
 	stopAllAndWaitCalls int
+	appliedForwards     [][]profile.LocalForward
+	forwardStates       []connection.LocalForwardState
+}
+
+func (r *fakeRuntime) ApplyLocalForwards(_ context.Context, _ string, next []profile.LocalForward) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appliedForwards = append(r.appliedForwards, next)
+	return nil
+}
+
+func (*fakeRuntime) RetryLocalForward(string, profile.LocalForwardKey) {}
+
+func (r *fakeRuntime) LocalForwardStates(string) []connection.LocalForwardState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.forwardStates
 }
 
 func newFakeRuntime() *fakeRuntime {
