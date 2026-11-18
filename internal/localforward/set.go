@@ -34,12 +34,13 @@ type Dialer struct {
 }
 
 type entry struct {
-	rule   profile.LocalForward
-	status Status
-	err    string
-	cancel context.CancelFunc
-	closer func()
-	done   chan struct{}
+	rule    profile.LocalForward
+	status  Status
+	err     string
+	dialErr string
+	cancel  context.CancelFunc
+	closer  func()
+	done    chan struct{}
 }
 
 // Set reconciles listeners against a rule list and tracks per-rule state.
@@ -49,12 +50,15 @@ type Set struct {
 	timeouts socksconn.Timeouts
 	changed  func()
 
+	op      sync.Mutex
 	mu      sync.Mutex
+	closed  bool
 	entries map[profile.LocalForwardKey]*entry
 	order   []profile.LocalForwardKey
 }
 
-// New creates a Set whose rules live until ctx ends or Close is called. changed is called after state changes.
+// New creates a Set. Close ends every rule and is terminal; canceling ctx only stops in-flight dials.
+// changed is called after state changes.
 func New(ctx context.Context, dial Dialer, timeouts socksconn.Timeouts, changed func()) *Set {
 	if changed == nil {
 		changed = func() {}
@@ -68,10 +72,14 @@ func New(ctx context.Context, dial Dialer, timeouts socksconn.Timeouts, changed 
 	}
 }
 
-// Apply binds added rules, closes removed or changed ones and leaves unchanged rules and their sessions alone.
-// A failed bind is recorded as that rule's state, never returned.
+// Apply releases removed or retargeted rules, then binds new ones, leaving unchanged rules and their
+// sessions alone. A failed bind is recorded as that rule's state, never returned. It does nothing after Close.
 func (s *Set) Apply(next []profile.LocalForward) {
-	s.mu.Lock()
+	s.op.Lock()
+	defer s.op.Unlock()
+	if s.isClosed() {
+		return
+	}
 	wanted := make(map[profile.LocalForwardKey]profile.LocalForward, len(next))
 	order := make([]profile.LocalForwardKey, 0, len(next))
 	for _, rule := range next {
@@ -79,6 +87,7 @@ func (s *Set) Apply(next []profile.LocalForward) {
 		order = append(order, rule.Key())
 	}
 	var stale []*entry
+	s.mu.Lock()
 	for key, e := range s.entries {
 		rule, ok := wanted[key]
 		if !ok || rule.TargetAddr != e.rule.TargetAddr {
@@ -86,48 +95,66 @@ func (s *Set) Apply(next []profile.LocalForward) {
 			delete(s.entries, key)
 		}
 	}
-	for _, key := range order {
-		if _, ok := s.entries[key]; !ok {
-			s.entries[key] = s.start(wanted[key])
-		}
-	}
 	s.order = order
 	s.mu.Unlock()
 	for _, e := range stale {
 		e.stop()
+	}
+	for _, key := range order {
+		s.mu.Lock()
+		_, exists := s.entries[key]
+		s.mu.Unlock()
+		if !exists {
+			s.install(key, s.start(wanted[key]))
+		}
 	}
 	s.changed()
 }
 
 // Retry rebinds a rule that is in the error state.
 func (s *Set) Retry(key profile.LocalForwardKey) {
-	s.mu.Lock()
-	e, ok := s.entries[key]
-	if !ok || e.status != StatusError {
-		s.mu.Unlock()
+	s.op.Lock()
+	defer s.op.Unlock()
+	if s.isClosed() {
 		return
 	}
-	s.entries[key] = s.start(e.rule)
+	s.mu.Lock()
+	e, ok := s.entries[key]
+	retry := ok && e.status == StatusError
 	s.mu.Unlock()
+	if !retry {
+		return
+	}
+	e.stop()
+	s.install(key, s.start(e.rule))
 	s.changed()
 }
 
-// States returns the state of every rule in rule order.
+// States returns the state of every rule in rule order. For an active rule Err holds the last dial failure, if any.
 func (s *Set) States() []State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	states := make([]State, 0, len(s.order))
 	for _, key := range s.order {
-		if e, ok := s.entries[key]; ok {
-			states = append(states, State{Key: key, Status: e.status, Err: e.err})
+		e, ok := s.entries[key]
+		if !ok {
+			continue
 		}
+		msg := e.err
+		if e.status == StatusActive {
+			msg = e.dialErr
+		}
+		states = append(states, State{Key: key, Status: e.status, Err: msg})
 	}
 	return states
 }
 
-// Close stops every rule and waits for its goroutines.
+// Close stops every rule, waits for its goroutines and makes later Apply and Retry calls no-ops.
 func (s *Set) Close() {
+	s.op.Lock()
+	defer s.op.Unlock()
 	s.mu.Lock()
+	s.closed = true
 	entries := s.entries
 	s.entries = map[profile.LocalForwardKey]*entry{}
 	s.order = nil
@@ -135,6 +162,18 @@ func (s *Set) Close() {
 	for _, e := range entries {
 		e.stop()
 	}
+}
+
+func (s *Set) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *Set) install(key profile.LocalForwardKey, e *entry) {
+	s.mu.Lock()
+	s.entries[key] = e
+	s.mu.Unlock()
 }
 
 func (s *Set) start(rule profile.LocalForward) *entry {
@@ -155,6 +194,27 @@ func (s *Set) start(rule profile.LocalForward) *entry {
 	}
 	e.status = StatusActive
 	return e
+}
+
+func (s *Set) fail(ctx context.Context, e *entry, err error) {
+	s.mu.Lock()
+	live := ctx.Err() == nil && s.entries[e.rule.Key()] == e
+	if live {
+		e.status = StatusError
+		e.err = "listener stopped: " + err.Error()
+	}
+	s.mu.Unlock()
+	if live {
+		e.closer()
+		s.changed()
+	}
+}
+
+func (s *Set) dialFailed(e *entry, err error) {
+	s.mu.Lock()
+	e.dialErr = err.Error()
+	s.mu.Unlock()
+	s.changed()
 }
 
 func (e *entry) stop() {

@@ -22,19 +22,23 @@ func (s *Set) startTCP(ctx context.Context, e *entry) error {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
+				s.fail(ctx, e, err)
 				return
 			}
-			conns.Go(func() { s.relayTCP(ctx, conn, e.rule.TargetAddr) })
+			conns.Go(func() { s.relayTCP(ctx, e, conn) })
 		}
 	}()
 	return nil
 }
 
-func (s *Set) relayTCP(ctx context.Context, conn net.Conn, target string) {
+func (s *Set) relayTCP(ctx context.Context, e *entry, conn net.Conn) {
 	dialCtx, cancel := socksconn.DialContext(ctx, ctx, s.timeouts.Dial)
-	out, err := s.dial.TCP(dialCtx, target)
+	out, err := s.dial.TCP(dialCtx, e.rule.TargetAddr)
 	cancel()
 	if err != nil {
+		if ctx.Err() == nil {
+			s.dialFailed(e, err)
+		}
 		_ = conn.Close()
 		return
 	}

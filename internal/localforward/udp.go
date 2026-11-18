@@ -8,6 +8,10 @@ import (
 	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 )
 
+type udpSession struct {
+	conn net.Conn
+}
+
 func (s *Set) startUDP(ctx context.Context, e *entry) error {
 	var lc net.ListenConfig
 	packetConn, err := lc.ListenPacket(ctx, "udp", e.rule.ListenAddr)
@@ -17,76 +21,101 @@ func (s *Set) startUDP(ctx context.Context, e *entry) error {
 	e.closer = func() { _ = packetConn.Close() }
 	go func() {
 		defer close(e.done)
-		s.serveUDP(ctx, packetConn, e.rule.TargetAddr)
+		s.serveUDP(ctx, e, packetConn)
 	}()
 	return nil
 }
 
-func (s *Set) serveUDP(ctx context.Context, packetConn net.PacketConn, target string) {
+func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn) {
 	var (
 		mu       sync.Mutex
-		sessions = map[string]net.Conn{}
+		sessions = map[string]*udpSession{}
 		wg       sync.WaitGroup
 	)
 	defer func() {
 		mu.Lock()
-		for _, conn := range sessions {
-			_ = conn.Close()
+		for _, sess := range sessions {
+			if sess.conn != nil {
+				_ = sess.conn.Close()
+			}
 		}
 		mu.Unlock()
 		wg.Wait()
 	}()
 
-	session := func(key string, source net.Addr) net.Conn {
+	retire := func(key string, sess *udpSession) {
 		mu.Lock()
-		conn := sessions[key]
-		mu.Unlock()
-		if conn != nil {
-			return conn
+		if sessions[key] == sess {
+			delete(sessions, key)
 		}
+		mu.Unlock()
+		if sess.conn != nil {
+			_ = sess.conn.Close()
+		}
+	}
+
+	open := func(key string, source net.Addr, sess *udpSession, first []byte) {
 		dialCtx, cancel := socksconn.DialContext(ctx, ctx, s.timeouts.Dial)
-		raw, err := s.dial.UDP(dialCtx, target)
+		raw, err := s.dial.UDP(dialCtx, e.rule.TargetAddr)
 		cancel()
 		if err != nil {
-			return nil
-		}
-		conn = socksconn.WrapUDP(raw, s.timeouts.UDPIdle)
-		mu.Lock()
-		sessions[key] = conn
-		mu.Unlock()
-		wg.Go(func() {
-			defer func() {
-				_ = conn.Close()
-				mu.Lock()
-				if sessions[key] == conn {
-					delete(sessions, key)
-				}
-				mu.Unlock()
-			}()
-			buf := make([]byte, socksconn.UDPBufferSize)
-			for {
-				n, err := conn.Read(buf)
-				if n > 0 {
-					_, _ = packetConn.WriteTo(buf[:n], source)
-				}
-				if err != nil {
-					return
-				}
+			if ctx.Err() == nil {
+				s.dialFailed(e, err)
 			}
-		})
-		return conn
+			retire(key, sess)
+			return
+		}
+		conn := socksconn.WrapUDP(raw, s.timeouts.UDPIdle)
+		mu.Lock()
+		sess.conn = conn
+		stale := sessions[key] != sess || ctx.Err() != nil
+		mu.Unlock()
+		if stale {
+			_ = conn.Close()
+			return
+		}
+		_, werr := conn.Write(first)
+		if werr != nil {
+			retire(key, sess)
+			return
+		}
+		buf := make([]byte, socksconn.UDPBufferSize)
+		for {
+			n, rerr := conn.Read(buf)
+			if rerr != nil {
+				retire(key, sess)
+				return
+			}
+			_, _ = packetConn.WriteTo(buf[:n], source)
+		}
 	}
 
 	buf := make([]byte, socksconn.UDPBufferSize)
 	for {
 		n, source, err := packetConn.ReadFrom(buf)
 		if err != nil {
+			s.fail(ctx, e, err)
 			return
 		}
-		conn := session(source.String(), source)
+		key := source.String()
+		mu.Lock()
+		sess, ok := sessions[key]
+		if !ok {
+			sess = &udpSession{}
+			sessions[key] = sess
+			payload := append([]byte(nil), buf[:n]...)
+			wg.Go(func() { open(key, source, sess, payload) })
+			mu.Unlock()
+			continue
+		}
+		conn := sess.conn
+		mu.Unlock()
 		if conn == nil {
 			continue
 		}
-		_, _ = conn.Write(buf[:n])
+		_, werr := conn.Write(buf[:n])
+		if werr != nil {
+			retire(key, sess)
+		}
 	}
 }

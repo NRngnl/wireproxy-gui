@@ -2,6 +2,7 @@ package localforward
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync/atomic"
@@ -11,6 +12,8 @@ import (
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
 	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 )
+
+var errDial = errors.New("no route")
 
 func listenTCP(t *testing.T, addr string) (net.Listener, error) {
 	t.Helper()
@@ -177,4 +180,51 @@ func TestUDPRelayAndIdleExpiry(t *testing.T) {
 	if dials.Load() != 2 {
 		t.Fatalf("dials = %d, want 2 (idle session should expire)", dials.Load())
 	}
+}
+
+func TestRetargetStaysActiveAndCloseIsTerminal(t *testing.T) {
+	first, second := echoServer(t), echoServer(t)
+	listen := freeAddr(t)
+	set := newTestSet(t)
+	set.Apply([]profile.LocalForward{tcpRule(listen, first)})
+	set.Apply([]profile.LocalForward{tcpRule(listen, second)})
+	if states := set.States(); len(states) != 1 || states[0].Status != StatusActive {
+		t.Fatalf("after retarget: %#v", states)
+	}
+	conn, err := dialTCP(t, listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	set.Close()
+	set.Apply([]profile.LocalForward{tcpRule(listen, second)})
+	l, err := listenTCP(t, listen)
+	if err != nil {
+		t.Fatalf("Apply after Close rebound the port: %v", err)
+	}
+	_ = l.Close()
+}
+
+func TestDialFailureIsRuleStateNotListenerDeath(t *testing.T) {
+	listen := freeAddr(t)
+	set := New(t.Context(), Dialer{TCP: func(context.Context, string) (net.Conn, error) {
+		return nil, errDial
+	}}, socksconn.Timeouts{}, nil)
+	defer set.Close()
+	set.Apply([]profile.LocalForward{tcpRule(listen, "x:1")})
+	conn, err := dialTCP(t, listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.ReadAll(conn)
+	_ = conn.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if st := set.States()[0]; st.Status == StatusActive && st.Err == errDial.Error() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("states = %#v", set.States())
 }
