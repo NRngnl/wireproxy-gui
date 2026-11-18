@@ -136,3 +136,14 @@ func TestSlowStopDoesNotBlockService(t *testing.T) {
 	}
 	close(release)
 }
+
+func TestStoppedEventDuringStopLeavesStatusStopped(t *testing.T) {
+	service, item, runtime := startedService(t)
+	runtime.onStop = func() {
+		service.handleRuntimeEvent(connection.Event{Type: connection.EventStopped, ProfileID: item.ID, At: time.Now()})
+	}
+	service.Disconnect(item.ID)
+	if got := service.Status(item.ID); got != StatusStopped {
+		t.Fatalf("status = %q, want stopped", got)
+	}
+}

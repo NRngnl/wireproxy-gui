@@ -562,15 +562,14 @@ func (s *Service) disconnect(profileID, message string) bool {
 		pending.cancel()
 		canceling = true
 	}
+	s.statuses[profileID] = StatusStopping
 	s.mu.Unlock()
 	stopped := false
 	if s.runtime != nil {
 		stopped = s.runtime.Stop(profileID)
 	}
 	s.mu.Lock()
-	if stopped || canceling {
-		s.statuses[profileID] = StatusStopping
-	} else {
+	if !stopped && !canceling && s.statuses[profileID] == StatusStopping {
 		s.statuses[profileID] = StatusStopped
 	}
 	if message != "" {

@@ -650,6 +650,7 @@ type fakeRuntime struct {
 	logoutErr           error
 	stopAllAndWaitCalls int
 	stopBlock           chan struct{}
+	onStop              func()
 	appliedForwards     [][]profile.LocalForward
 	forwardStates       []connection.LocalForwardState
 }
@@ -749,6 +750,12 @@ func (r *fakeRuntime) Stop(profileID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.stopCalls = append(r.stopCalls, profileID)
+	if r.onStop != nil {
+		hook := r.onStop
+		r.mu.Unlock()
+		hook()
+		r.mu.Lock()
+	}
 	if r.stopBlock != nil {
 		block := r.stopBlock
 		r.mu.Unlock()
