@@ -226,7 +226,7 @@ For example, TCP `127.0.0.1:2222` to `remote-pc:22` lets
   `::1`, `0.0.0.0`, `::` or a specific local IP are allowed.
 - Tailscale targets: a MagicDNS full name, an unambiguous short name, a peer's
   Tailscale IP, or an IP inside a subnet route advertised by an online peer.
-  The embedded node accepts subnet routes from your tailnet (RouteAll), so a routed IP is only
+  The embedded node accepts subnet routes from your tailnet (RouteAll), so SOCKS5 connections of this profile also reach approved subnet routes, and a routed IP is only
   reachable when the route is advertised, approved and its router is online. Names are never resolved by the host. A target that matches no peer or route
   fails closed. If the tailnet has no peers yet, the dial waits up to 5 seconds.
 - WireGuard targets: an IP address, or a name when the WireGuard config sets
