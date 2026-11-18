@@ -24,7 +24,11 @@ var (
 	ErrAlreadyConnected = connection.ErrAlreadyConnected
 	ErrConfigInvalid    = errors.New("wireproxy config validation failed")
 	ErrSocks5Missing    = errors.New("wireproxy config does not contain a SOCKS5 listener")
+
+	errInvalidPersistentKeepalive = errors.New("PersistentKeepalive must be between 0 and 65535")
 )
+
+const defaultPersistentKeepalive = 25
 
 type EventType = connection.EventType
 
@@ -368,12 +372,57 @@ func parseProfileConfig(p profile.Profile) (*upstream.Configuration, error) {
 		return nil, err
 	}
 
-	return upstream.ParseConfig(tmpPath)
+	conf, err := upstream.ParseConfig(tmpPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, peer := range conf.Device.Peers {
+		if peer.KeepAlive < 0 || peer.KeepAlive > 65535 {
+			return nil, fmt.Errorf("%w: %d", errInvalidPersistentKeepalive, peer.KeepAlive)
+		}
+	}
+	return conf, nil
 }
 
 func wireproxyConfig(p profile.Profile) string {
 	base := stripSection(p.WireGuardConfig, "Socks5")
+	base = defaultPeerKeepalive(base, defaultPersistentKeepalive)
 	return fmt.Sprintf("%s\n\n[Socks5]\nBindAddress = %s\n", strings.TrimSpace(base), p.BindAddress())
+}
+
+func defaultPeerKeepalive(text string, keepalive int) string {
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines)+2)
+	inPeer := false
+	hasKeepalive := false
+
+	flushPeer := func() {
+		if inPeer && !hasKeepalive {
+			out = append(out, fmt.Sprintf("PersistentKeepalive = %d", keepalive))
+		}
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if section, ok := sectionHeaderName(trimmed); ok {
+			flushPeer()
+			inPeer = section == "peer"
+			hasKeepalive = false
+			out = append(out, line)
+			continue
+		}
+		if inPeer && trimmed != "" && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, ";") {
+			key, _, hasEquals := strings.Cut(trimmed, "=")
+			if hasEquals && strings.EqualFold(strings.TrimSpace(key), "PersistentKeepalive") {
+				hasKeepalive = true
+			} else if !hasEquals && strings.EqualFold(trimmed, "PersistentKeepalive") {
+				hasKeepalive = true
+			}
+		}
+		out = append(out, line)
+	}
+	flushPeer()
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 func stripSection(text, sectionName string) string {
@@ -382,9 +431,7 @@ func stripSection(text, sectionName string) string {
 	dropping := false
 	for line := range strings.SplitSeq(text, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.Contains(trimmed, "]") {
-			end := strings.Index(trimmed, "]")
-			current := strings.ToLower(strings.TrimSpace(trimmed[1:end]))
+		if current, ok := sectionHeaderName(trimmed); ok {
 			dropping = current == target
 		}
 		if !dropping {
@@ -392,6 +439,14 @@ func stripSection(text, sectionName string) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+func sectionHeaderName(trimmed string) (string, bool) {
+	if !strings.HasPrefix(trimmed, "[") || !strings.Contains(trimmed, "]") {
+		return "", false
+	}
+	end := strings.Index(trimmed, "]")
+	return strings.ToLower(strings.TrimSpace(trimmed[1:end])), true
 }
 
 func findSocks5Config(conf *upstream.Configuration) (*upstream.Socks5Config, error) {

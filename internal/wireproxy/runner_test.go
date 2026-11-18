@@ -43,6 +43,59 @@ func TestWireproxyConfigReplacesSocks5Section(t *testing.T) {
 	}
 }
 
+func TestWireproxyPersistentKeepaliveBehavior(t *testing.T) {
+	t.Run("defaults omitted peer keepalive to 25 and preserves explicit values", func(t *testing.T) {
+		cfg := fmt.Sprintf(`[Interface]
+Address = 10.2.0.2/32
+PrivateKey = %s
+
+[Peer]
+PublicKey = %s
+AllowedIPs = 0.0.0.0/0
+
+[Peer]
+PublicKey = %s
+PersistentKeepalive = 0
+AllowedIPs = 10.3.0.0/24
+
+[Peer]
+PublicKey = %s
+persistentkeepalive = 15
+AllowedIPs = 10.4.0.0/24
+`, ephemeralWireGuardKey(t), ephemeralWireGuardKey(t), ephemeralWireGuardKey(t), ephemeralWireGuardKey(t))
+
+		parsed, err := parseProfileConfig(profile.New("demo", cfg, 18090))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(parsed.Device.Peers) != 3 {
+			t.Fatalf("peers = %d, want 3", len(parsed.Device.Peers))
+		}
+		if parsed.Device.Peers[0].KeepAlive != 25 {
+			t.Fatalf("peer 0 KeepAlive = %d, want 25", parsed.Device.Peers[0].KeepAlive)
+		}
+		if parsed.Device.Peers[1].KeepAlive != 0 {
+			t.Fatalf("peer 1 KeepAlive = %d, want 0", parsed.Device.Peers[1].KeepAlive)
+		}
+		if parsed.Device.Peers[2].KeepAlive != 15 {
+			t.Fatalf("peer 2 KeepAlive = %d, want 15", parsed.Device.Peers[2].KeepAlive)
+		}
+	})
+
+	t.Run("rejects malformed explicit values loudly", func(t *testing.T) {
+		for _, raw := range []string{"abc", "", "-1", "65536"} {
+			t.Run("value_"+raw, func(t *testing.T) {
+				cfg := sampleConfig(t) + "PersistentKeepalive = " + raw + "\n"
+				runner := newTestRunner()
+				err := runner.Start(t.Context(), profile.New("bad-keepalive", cfg, 18091))
+				if !errors.Is(err, ErrConfigInvalid) {
+					t.Fatalf("Start(%q) error = %v, want ErrConfigInvalid", raw, err)
+				}
+			})
+		}
+	})
+}
+
 func ephemeralWireGuardKey(t *testing.T) string {
 	t.Helper()
 	var key [32]byte

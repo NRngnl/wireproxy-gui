@@ -176,8 +176,10 @@ Endpoint = ...
 ```
 
 The GUI stores the WireGuard configuration text you provide. When a profile is
-started, it removes any existing `[Socks5]` section from that text and injects
-the profile's selected bind address:
+started, it removes any existing `[Socks5]` section from that text, defaults
+`PersistentKeepalive` to `25` seconds on any `[Peer]` section that omits it
+(preserving valid explicit values including `0`), and injects the profile's
+selected bind address:
 
 ```ini
 [Socks5]
@@ -252,6 +254,12 @@ state.
 When quitting from the tray or closing the app, Wireproxy GUI calls graceful
 shutdown for all active profiles and waits up to five seconds for listeners to
 stop before process exit continues.
+
+SOCKS5 dial attempts are bounded by a 30-second timeout while honoring earlier
+cancellation. Active SOCKS5 TCP relays refresh a 5-minute idle read deadline on
+traffic in either direction and bound half-close drains to 60 seconds. SOCKS5
+UDP ASSOCIATE relays and Tailscale UDP port-forward sessions time out after 60
+seconds of inactivity.
 
 ## Security Notes
 
