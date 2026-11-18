@@ -17,6 +17,7 @@ import (
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
+	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 	socks5 "github.com/things-go/go-socks5"
 	"github.com/things-go/go-socks5/bufferpool"
 	"tailscale.com/ipn"
@@ -92,7 +93,9 @@ type Runner struct {
 
 	listen      func(network, address string) (net.Listener, error)
 	newNode     func(profile.Profile, string, func(string, ...any)) (tsNode, error)
-	serveSocks5 func(context.Context, tsNode, net.Listener) error
+	serveSocks5 func(context.Context, profile.Profile, tsNode, net.Listener) error
+
+	timeouts socksconn.Timeouts
 
 	mu    sync.Mutex
 	procs map[string]*process
@@ -165,6 +168,7 @@ func NewRunner() *Runner {
 		stateDir: stateDir,
 		listen:   net.Listen,
 		procs:    map[string]*process{},
+		timeouts: socksconn.Timeouts{}.WithDefaults(),
 	}
 	r.newNode = newTSNetNode
 	r.serveSocks5 = r.runSocks5
@@ -346,7 +350,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	r.emit(EventStarted, p, "connected on "+p.BindAddress())
 
 	go func() {
-		err := r.serveSocks5(procCtx, runningNode, listener)
+		err := r.serveSocks5(procCtx, p, runningNode, listener)
 		canceled := procCtx.Err() != nil
 		proc.close()
 		r.removeProcess(p.ID, proc)
@@ -755,31 +759,65 @@ func (r *Runner) processes() []*process {
 	return procs
 }
 
-func (r *Runner) runSocks5(_ context.Context, node tsNode, listener net.Listener) error {
+func (r *Runner) runSocks5(ctx context.Context, p profile.Profile, node tsNode, listener net.Listener) error {
+	timeouts := r.timeouts.WithDefaults()
+	wrappedLn := socksconn.WrapListener(listener, timeouts.TCPIdle, timeouts.Drain)
+	stop := context.AfterFunc(ctx, func() {
+		_ = wrappedLn.Close()
+	})
+	defer stop()
+
+	var assocWG sync.WaitGroup
+	defer assocWG.Wait()
+
+	dialFn := func(reqCtx context.Context, network, addr string) (net.Conn, error) {
+		dialCtx, cancel := socksconn.DialContext(ctx, reqCtx, timeouts.Dial)
+		defer cancel()
+		conn, err := node.Dial(dialCtx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(network, "udp") {
+			return socksconn.WrapUDP(conn, timeouts.UDPIdle), nil
+		}
+		return socksconn.WrapTCP(socksReplyConn{Conn: conn}, timeouts.TCPIdle, timeouts.Drain), nil
+	}
+
+	assocHandle := socksconn.AssociateHandler(ctx, dialFn, func(err error) {
+		if err != nil {
+			r.emit(EventLog, p, err.Error())
+		}
+	})
+
 	server := socks5.NewServer(
 		socks5.WithResolver(noResolve{}),
-		socks5.WithDialAndRequest(func(ctx context.Context, network, _ string, request *socks5.Request) (net.Conn, error) {
-			conn, err := node.Dial(ctx, network, request.RawDestAddr.String())
+		socks5.WithDialAndRequest(func(reqCtx context.Context, network, _ string, request *socks5.Request) (net.Conn, error) {
+			dialCtx, cancel := socksconn.DialContext(ctx, reqCtx, timeouts.Dial)
+			defer cancel()
+			conn, err := node.Dial(dialCtx, network, request.RawDestAddr.String())
 			if err != nil {
 				return nil, err
 			}
-			return socksReplyConn{Conn: conn}, nil
+			return socksconn.WrapTCP(socksReplyConn{Conn: conn}, timeouts.TCPIdle, timeouts.Drain), nil
 		}),
-		// WithDial backs SOCKS5 UDP ASSOCIATE (go-socks5's handleAssociate reads
-		// only the WithDial callback, never the WithDialAndRequest one used above
-		// for CONNECT). Without this, go-socks5's default RuleSet still accepts
-		// UDP ASSOCIATE requests but silently falls back to a bare net.Dial that
-		// never touches the tsnet node, so relayed UDP datagrams would leave over
-		// the host's real network instead of the tailnet. Routing it through
-		// node.Dial makes UDP (e.g. game/media streams) reach tailnet peers the
-		// same way TCP CONNECT already does.
-		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return node.Dial(ctx, network, addr)
+		// NOTE: WithDial backs SOCKS5 UDP ASSOCIATE (go-socks5's handleAssociate reads
+		// only WithDial, never WithDialAndRequest).
+		socks5.WithDial(dialFn),
+		socks5.WithAssociateHandle(func(reqCtx context.Context, writer io.Writer, request *socks5.Request) error {
+			assocWG.Add(1)
+			defer assocWG.Done()
+			return assocHandle(reqCtx, writer, request)
+		}),
+		socks5.WithAssociateMiddleware(func(_ context.Context, writer io.Writer, _ *socks5.Request) error {
+			if c, ok := writer.(interface{ ClearIdleTimeout() error }); ok {
+				return c.ClearIdleTimeout()
+			}
+			return nil
 		}),
 		socks5.WithRule(socks5.NewPermitConnAndAss()),
-		socks5.WithBufferPool(bufferpool.NewPool(256*1024)),
+		socks5.WithBufferPool(bufferpool.NewPool(socksconn.BufferSize)),
 	)
-	return server.Serve(listener)
+	return server.Serve(wrappedLn)
 }
 
 // startPortForwards binds a listener (TCP) or packet conn (UDP) for every
@@ -847,6 +885,7 @@ func selfTailscaleIP(status *ipnstate.Status) (netip.Addr, error) {
 // It emits EventError for operational failures that are not due to context
 // cancellation or a closed listener.
 func (r *Runner) relayTCPForward(ctx context.Context, _ tsNode, listener net.Listener, rule profile.PortForward, profileID, profileName string) {
+	timeouts := r.timeouts.WithDefaults()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -856,58 +895,61 @@ func (r *Runner) relayTCPForward(ctx context.Context, _ tsNode, listener net.Lis
 			r.emitForwardError(rule, err, profileID, profileName)
 			return
 		}
-		go relayTCPConn(ctx, conn, rule.TargetAddr)
+		go relayTCPConn(ctx, conn, rule.TargetAddr, timeouts)
 	}
 }
 
-// relayTCPConn dials rule's target and relays bytes bidirectionally between
-// conn and the target connection, closing both sides when either direction
-// finishes or ctx is canceled.
-func relayTCPConn(ctx context.Context, conn net.Conn, targetAddr string) {
+func relayTCPConn(ctx context.Context, conn net.Conn, targetAddr string, timeouts socksconn.Timeouts) {
 	defer conn.Close()
+	dialCtx, cancel := socksconn.DialContext(ctx, ctx, timeouts.Dial)
 	var dialer net.Dialer
-	target, err := dialer.DialContext(ctx, "tcp", targetAddr)
+	target, err := dialer.DialContext(dialCtx, "tcp", targetAddr)
+	cancel()
 	if err != nil {
 		return
 	}
 	defer target.Close()
 
+	wrappedConn := socksconn.WrapTCP(conn, timeouts.TCPIdle, timeouts.Drain)
+	wrappedTarget := socksconn.WrapTCP(target, timeouts.TCPIdle, timeouts.Drain)
+
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = conn.Close()
-			_ = target.Close()
+			_ = wrappedConn.Close()
+			_ = wrappedTarget.Close()
 		case <-done:
 		}
 	}()
 
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(target, conn)
-		_ = target.Close()
-	}()
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(conn, target)
-		_ = conn.Close()
-	}()
+	wg.Go(func() {
+		_, _ = io.Copy(wrappedTarget, wrappedConn)
+		closeWriteOrClose(wrappedTarget, target)
+	})
+	wg.Go(func() {
+		_, _ = io.Copy(wrappedConn, wrappedTarget)
+		closeWriteOrClose(wrappedConn, conn)
+	})
 	wg.Wait()
 	close(done)
 }
 
-// relayUDPForward implements a NAT-style UDP relay: datagrams read from
-// packetConn are keyed by source address, and each new source gets its own
-// dial to rule.TargetAddr (plain net.Dial, not node.Dial) whose replies are
-// written back out through packetConn.WriteTo. All session goroutines exit
-// when ctx is canceled.
+func closeWriteOrClose(wrapped, raw net.Conn) {
+	if _, ok := raw.(interface{ CloseWrite() error }); ok {
+		if cw, ok := wrapped.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+			return
+		}
+	}
+	_ = wrapped.Close()
+}
+
 func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.PacketConn, rule profile.PortForward, profileID, profileName string) {
-	go func() {
-		<-ctx.Done()
-		_ = packetConn.Close()
-	}()
+	timeouts := r.timeouts.WithDefaults()
+	dialTimeout := timeouts.Dial
+	udpIdleTimeout := timeouts.UDPIdle
 
 	type udpSession struct {
 		conn net.Conn
@@ -915,6 +957,96 @@ func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.P
 
 	var mu sync.Mutex
 	sessions := map[string]*udpSession{}
+
+	closeAll := func() {
+		_ = packetConn.Close()
+		mu.Lock()
+		for key, sess := range sessions {
+			_ = sess.conn.Close()
+			delete(sessions, key)
+		}
+		mu.Unlock()
+	}
+	defer closeAll()
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			closeAll()
+		case <-done:
+		}
+	}()
+
+	getOrDialSession := func(key string, srcAddr net.Addr) (*udpSession, error) {
+		mu.Lock()
+		sess := sessions[key]
+		mu.Unlock()
+		if sess != nil {
+			return sess, nil
+		}
+
+		dialCtx, cancel := socksconn.DialContext(ctx, ctx, dialTimeout)
+		var dialer net.Dialer
+		targetConn, dialErr := dialer.DialContext(dialCtx, "udp", rule.TargetAddr)
+		cancel()
+		if dialErr != nil {
+			return nil, dialErr
+		}
+		wrappedConn := socksconn.WrapUDP(targetConn, udpIdleTimeout)
+
+		mu.Lock()
+		if existing := sessions[key]; existing != nil {
+			mu.Unlock()
+			_ = wrappedConn.Close()
+			return existing, nil
+		}
+		sess = &udpSession{conn: wrappedConn}
+		sessions[key] = sess
+		mu.Unlock()
+
+		go func(source net.Addr, session *udpSession) {
+			defer func() {
+				_ = session.conn.Close()
+				mu.Lock()
+				if sessions[key] == session {
+					delete(sessions, key)
+				}
+				mu.Unlock()
+			}()
+			replyBuf := make([]byte, 64*1024)
+			for {
+				rn, readErr := session.conn.Read(replyBuf)
+				if rn > 0 || readErr == nil {
+					_, writeErr := packetConn.WriteTo(replyBuf[:rn], source)
+					if writeErr != nil {
+						if ctx.Err() == nil && !errors.Is(writeErr, net.ErrClosed) {
+							r.emitForwardError(rule, writeErr, profileID, profileName)
+						}
+						return
+					}
+				}
+				if readErr != nil {
+					return
+				}
+				if ctx.Err() != nil {
+					return
+				}
+			}
+		}(srcAddr, sess)
+
+		return sess, nil
+	}
+
+	removeSession := func(key string, sess *udpSession) {
+		mu.Lock()
+		if sessions[key] == sess {
+			delete(sessions, key)
+		}
+		mu.Unlock()
+		_ = sess.conn.Close()
+	}
 
 	buf := make([]byte, 64*1024)
 	for {
@@ -930,46 +1062,24 @@ func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.P
 		copy(payload, buf[:n])
 
 		key := srcAddr.String()
-		mu.Lock()
-		sess, ok := sessions[key]
-		if !ok {
-			var dialer net.Dialer
-			targetConn, dialErr := dialer.DialContext(ctx, "udp", rule.TargetAddr)
-			if dialErr != nil {
-				mu.Unlock()
-				continue
-			}
-			sess = &udpSession{conn: targetConn}
-			sessions[key] = sess
-			go func(source net.Addr, session *udpSession) {
-				defer func() {
-					_ = session.conn.Close()
-					mu.Lock()
-					delete(sessions, key)
-					mu.Unlock()
-				}()
-				go func() {
-					<-ctx.Done()
-					_ = session.conn.Close()
-				}()
-				replyBuf := make([]byte, 64*1024)
-				for {
-					rn, readErr := session.conn.Read(replyBuf)
-					if rn > 0 {
-						_, _ = packetConn.WriteTo(replyBuf[:rn], source)
-					}
-					if readErr != nil {
-						return
-					}
-					if ctx.Err() != nil {
-						return
+		sess, dialErr := getOrDialSession(key, srcAddr)
+		if dialErr != nil {
+			continue
+		}
+
+		_, writeErr := sess.conn.Write(payload)
+		if writeErr != nil {
+			removeSession(key, sess)
+			if errors.Is(writeErr, net.ErrClosed) {
+				sess, dialErr = getOrDialSession(key, srcAddr)
+				if dialErr == nil {
+					_, retryErr := sess.conn.Write(payload)
+					if retryErr != nil {
+						removeSession(key, sess)
 					}
 				}
-			}(srcAddr, sess)
+			}
 		}
-		mu.Unlock()
-
-		_, _ = sess.conn.Write(payload)
 	}
 }
 
@@ -994,6 +1104,13 @@ func (r *Runner) emitForwardError(rule profile.PortForward, err error, profileID
 
 type socksReplyConn struct {
 	net.Conn
+}
+
+func (c socksReplyConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
 }
 
 func (c socksReplyConn) LocalAddr() net.Addr {
