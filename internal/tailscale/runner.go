@@ -342,7 +342,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 
 	err = configureExitNode(procCtx, node, p.TailscaleConfig, status)
 	if err != nil {
-		return fmt.Errorf("configure Tailscale exit node: %w", err)
+		return fmt.Errorf("configure Tailscale preferences: %w", err)
 	}
 
 	if !proc.setNode(node) {

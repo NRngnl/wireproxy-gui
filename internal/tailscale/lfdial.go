@@ -31,14 +31,10 @@ func (n *realNode) DialUserspace(ctx context.Context, network string, remote net
 	if !ok {
 		return nil, errNoNetstack
 	}
-	local := netip.IPv4Unspecified()
-	if remote.Addr().Is6() {
-		local = netip.IPv6Unspecified()
-	}
 	if network == "udp" {
-		return ns.DialContextUDPWithBind(ctx, local, remote)
+		return ns.DialContextUDP(ctx, remote)
 	}
-	return ns.DialContextTCPWithBind(ctx, local, remote)
+	return ns.DialContextTCP(ctx, remote)
 }
 
 func localForwardDialer(node tsNode) localforward.Dialer {
@@ -80,11 +76,13 @@ func resolveWithPeerWait(ctx context.Context, node tsNode, host string) (netip.A
 	for {
 		status, err := client.Status(waitCtx)
 		if err != nil {
-			status, err = client.Status(ctx)
-			if err != nil {
+			if waitCtx.Err() != nil {
+				return netip.Addr{}, errTargetNotFound
+			}
+			if waitPoll(waitCtx) != nil {
 				return netip.Addr{}, err
 			}
-			return resolveTarget(status, host)
+			continue
 		}
 		ip, resolveErr := resolveTarget(status, host)
 		if resolveErr == nil || len(status.Peer) > 0 {

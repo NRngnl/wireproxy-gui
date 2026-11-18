@@ -38,7 +38,7 @@ func (r *Runner) localForwardSet(profileID string) *localforward.Set {
 	return proc.localForwards
 }
 
-// ApplyLocalForwards reconciles the running profile's local forwards with next.
+// ApplyLocalForwards reconciles the running profile's local forwards with next, which must be normalized and validated.
 func (r *Runner) ApplyLocalForwards(_ context.Context, profileID string, next []profile.LocalForward) error {
 	set := r.localForwardSet(profileID)
 	if set == nil {
