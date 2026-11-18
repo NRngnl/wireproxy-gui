@@ -1,6 +1,6 @@
 module github.com/NRngnl/wireproxy-gui
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0
@@ -8,14 +8,14 @@ require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/egoist/mygo v0.8.4-0.20261108082913-9233663736ca
-	github.com/lobehub/lobe-mygo v0.0.0-20261109101238-5b3ecde8b184
+	github.com/lobehub/lobe-mygo v0.0.0-20261116124832-d88b4ad7f238
 	github.com/muesli/termenv v0.16.0
 	github.com/things-go/go-socks5 v0.1.4
 	github.com/windtf/wireproxy v1.1.3
 	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.48.0
 	golang.zx2c4.com/wireguard v0.0.0-20261024220952-b3bc704ef0ee
-	tailscale.com v1.104.5
+	tailscale.com v1.104.7
 )
 
 require (
@@ -71,7 +71,7 @@ require (
 	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f // indirect
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20260917222731-e0ed2d0d0fea // indirect
-	github.com/tailscale/wireguard-go v0.0.0-20260928213032-417aef361226 // indirect
+	github.com/tailscale/wireguard-go v0.0.0-20261106233718-9e0ab45c16ca // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xo/terminfo v1.3.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
@@ -87,5 +87,5 @@ require (
 	golang.org/x/time v0.16.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v1.1.1 // indirect
-	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72 // indirect
+	gvisor.dev/gvisor v0.0.0-20261117211437-aab1e89c78fd // indirect
 )
