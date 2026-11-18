@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -43,6 +44,9 @@ type Runner struct {
 	startWireguard func(*upstream.Configuration, int) (*upstream.VirtualTun, error)
 	serveSocks5    func(context.Context, *upstream.Socks5Config, *upstream.VirtualTun, net.Listener) error
 	listen         func(network, address string) (net.Listener, error)
+	dialTun        func(context.Context, *upstream.VirtualTun, string, string) (net.Conn, error)
+
+	timeouts socksconn.Timeouts
 
 	mu    sync.Mutex
 	procs map[string]*process
@@ -66,6 +70,10 @@ func NewRunner() *Runner {
 		parseConfig:    parseProfileConfig,
 		startWireguard: upstream.StartWireguard,
 		listen:         net.Listen,
+		dialTun: func(ctx context.Context, tun *upstream.VirtualTun, network, addr string) (net.Conn, error) {
+			return tun.Tnet.DialContext(ctx, network, addr)
+		},
+		timeouts: socksconn.Timeouts{}.WithDefaults(),
 	}
 	r.serveSocks5 = r.runSocks5
 	return r
@@ -225,7 +233,7 @@ func (r *Runner) processes() []*process {
 	return procs
 }
 
-func (r *Runner) runSocks5(_ context.Context, config *upstream.Socks5Config, tun *upstream.VirtualTun, listener net.Listener) error {
+func (r *Runner) runSocks5(ctx context.Context, config *upstream.Socks5Config, tun *upstream.VirtualTun, listener net.Listener) error {
 	authMethods := []socks5.Authenticator{socks5.NoAuthAuthenticator{}}
 	if config.Username != "" {
 		authMethods = []socks5.Authenticator{
@@ -235,19 +243,32 @@ func (r *Runner) runSocks5(_ context.Context, config *upstream.Socks5Config, tun
 		}
 	}
 
+	timeouts := r.timeouts.WithDefaults()
+
 	server := socks5.NewServer(
-		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
-			conn, err := tun.Tnet.DialContext(ctx, network, addr)
+		socks5.WithDial(func(reqCtx context.Context, network, addr string) (net.Conn, error) {
+			dialCtx, cancel := socksconn.DialContext(ctx, reqCtx, timeouts.Dial)
+			defer cancel()
+			conn, err := r.dialTun(dialCtx, tun, network, addr)
 			if err != nil {
 				return nil, err
 			}
-			return socksconn.Wrap(conn), nil
+			if strings.HasPrefix(network, "udp") {
+				return socksconn.WrapUDP(conn, timeouts.UDPIdle), nil
+			}
+			return socksconn.WrapTCP(conn, timeouts.TCPIdle, timeouts.Drain), nil
+		}),
+		socks5.WithAssociateMiddleware(func(_ context.Context, writer io.Writer, _ *socks5.Request) error {
+			if c, ok := writer.(interface{ ClearIdleTimeout() error }); ok {
+				return c.ClearIdleTimeout()
+			}
+			return nil
 		}),
 		socks5.WithResolver(tun),
 		socks5.WithAuthMethods(authMethods),
-		socks5.WithBufferPool(bufferpool.NewPool(256*1024)),
+		socks5.WithBufferPool(bufferpool.NewPool(socksconn.BufferSize)),
 	)
-	return server.Serve(listener)
+	return server.Serve(socksconn.WrapListener(listener, timeouts.TCPIdle, timeouts.Drain))
 }
 
 func (r *Runner) removeProcess(profileID string, proc *process) {

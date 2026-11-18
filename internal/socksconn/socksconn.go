@@ -28,6 +28,32 @@ const (
 	keepAlivePeriod = 30 * time.Second
 )
 
+// Timeouts configures dial, idle, and half-close drain bounds for SOCKS5 and
+// port-forward relays. Zero values fall back to package defaults.
+type Timeouts struct {
+	Dial    time.Duration
+	TCPIdle time.Duration
+	Drain   time.Duration
+	UDPIdle time.Duration
+}
+
+// WithDefaults returns a copy of t with non-positive fields set to package defaults.
+func (t Timeouts) WithDefaults() Timeouts {
+	if t.Dial <= 0 {
+		t.Dial = DialTimeout
+	}
+	if t.TCPIdle <= 0 {
+		t.TCPIdle = IdleTimeout
+	}
+	if t.Drain <= 0 {
+		t.Drain = DrainTimeout
+	}
+	if t.UDPIdle <= 0 {
+		t.UDPIdle = UDPIdleTimeout
+	}
+	return t
+}
+
 type idleDeadline struct {
 	mu         sync.Mutex
 	timeout    time.Duration
