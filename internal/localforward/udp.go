@@ -32,8 +32,10 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 		sessions = map[string]*udpSession{}
 		wg       sync.WaitGroup
 	)
+	closing := false
 	defer func() {
 		mu.Lock()
+		closing = true
 		for _, sess := range sessions {
 			if sess.conn != nil {
 				_ = sess.conn.Close()
@@ -65,10 +67,11 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 			retire(key, sess)
 			return
 		}
+		s.dialSucceeded(e)
 		conn := socksconn.WrapUDP(raw, s.timeouts.UDPIdle)
 		mu.Lock()
 		sess.conn = conn
-		stale := sessions[key] != sess || ctx.Err() != nil
+		stale := sessions[key] != sess || ctx.Err() != nil || closing
 		mu.Unlock()
 		if stale {
 			_ = conn.Close()

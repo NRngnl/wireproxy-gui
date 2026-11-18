@@ -19,7 +19,7 @@ var ErrPortInUse = errors.New("port in use")
 // Status is the live status of one rule.
 type Status = connection.LocalForwardStatus
 
-// State reports one rule's status; Err is set when Status is StatusError.
+// State reports one rule's status; Err is the bind failure for StatusError, or the last dial failure for StatusActive.
 type State = connection.LocalForwardState
 
 const (
@@ -83,6 +83,9 @@ func (s *Set) Apply(next []profile.LocalForward) {
 	wanted := make(map[profile.LocalForwardKey]profile.LocalForward, len(next))
 	order := make([]profile.LocalForwardKey, 0, len(next))
 	for _, rule := range next {
+		if _, dup := wanted[rule.Key()]; dup {
+			continue
+		}
 		wanted[rule.Key()] = rule
 		order = append(order, rule.Key())
 	}
@@ -205,7 +208,18 @@ func (s *Set) fail(ctx context.Context, e *entry, err error) {
 	}
 	s.mu.Unlock()
 	if live {
+		e.cancel()
 		e.closer()
+		s.changed()
+	}
+}
+
+func (s *Set) dialSucceeded(e *entry) {
+	s.mu.Lock()
+	changed := e.dialErr != ""
+	e.dialErr = ""
+	s.mu.Unlock()
+	if changed {
 		s.changed()
 	}
 }

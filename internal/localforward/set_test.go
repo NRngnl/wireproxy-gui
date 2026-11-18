@@ -228,3 +228,72 @@ func TestDialFailureIsRuleStateNotListenerDeath(t *testing.T) {
 	}
 	t.Fatalf("states = %#v", set.States())
 }
+
+func TestDialErrorClearsAfterSuccess(t *testing.T) {
+	target := echoServer(t)
+	listen := freeAddr(t)
+	var d net.Dialer
+	fail := atomic.Bool{}
+	fail.Store(true)
+	set := New(t.Context(), Dialer{TCP: func(ctx context.Context, addr string) (net.Conn, error) {
+		if fail.Load() {
+			return nil, errDial
+		}
+		return d.DialContext(ctx, "tcp", addr)
+	}}, socksconn.Timeouts{}, nil)
+	defer set.Close()
+	set.Apply([]profile.LocalForward{tcpRule(listen, target)})
+	use := func() {
+		c, err := dialTCP(t, listen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _ = c.Write([]byte("x"))
+		_, _ = io.ReadAll(c)
+		_ = c.Close()
+	}
+	use()
+	waitErr := func(want string) {
+		for range 200 {
+			if set.States()[0].Err == want {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("err = %q, want %q", set.States()[0].Err, want)
+	}
+	waitErr(errDial.Error())
+	fail.Store(false)
+	use()
+	waitErr("")
+}
+
+func TestSetCloseDoesNotHangOnUDPSessions(t *testing.T) {
+	var lc net.ListenConfig
+	probe, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listen := probe.LocalAddr().String()
+	_ = probe.Close()
+	var d net.Dialer
+	set := New(t.Context(), Dialer{UDP: func(ctx context.Context, addr string) (net.Conn, error) {
+		return d.DialContext(ctx, "udp", addr)
+	}}, socksconn.Timeouts{}, nil)
+	set.Apply([]profile.LocalForward{{Protocol: profile.PortForwardUDP, ListenAddr: listen, TargetAddr: "127.0.0.1:9"}})
+	client, err := d.DialContext(t.Context(), "udp", listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_, _ = client.Write([]byte("x"))
+	time.Sleep(100 * time.Millisecond)
+	done := make(chan struct{})
+	go func() { set.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung with an active UDP session")
+	}
+}

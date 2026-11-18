@@ -10,7 +10,7 @@ const (
 	LocalForwardError  LocalForwardStatus = "error"
 )
 
-// LocalForwardState reports one rule's status; Err is set when Status is LocalForwardError.
+// LocalForwardState reports one rule's status; Err is the bind failure for LocalForwardError, or the last dial failure for LocalForwardActive.
 type LocalForwardState struct {
 	Key    profile.LocalForwardKey
 	Status LocalForwardStatus

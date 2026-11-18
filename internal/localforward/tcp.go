@@ -42,5 +42,6 @@ func (s *Set) relayTCP(ctx context.Context, e *entry, conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
+	s.dialSucceeded(e)
 	socksconn.RelayTCP(ctx, conn, out, s.timeouts)
 }
