@@ -1,6 +1,7 @@
 package wireproxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -8,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -90,6 +93,82 @@ AllowedIPs = 10.4.0.0/24
 				err := runner.Start(t.Context(), profile.New("bad-keepalive", cfg, 18091))
 				if !errors.Is(err, ErrConfigInvalid) {
 					t.Fatalf("Start(%q) error = %v, want ErrConfigInvalid", raw, err)
+				}
+			})
+		}
+	})
+
+	t.Run("defaults external WGConfig peers and preserves explicit values and relative paths", func(t *testing.T) {
+		dir := t.TempDir()
+		subDir := filepath.Join(dir, "sub")
+		err := os.MkdirAll(subDir, 0o700)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wgCfg := fmt.Sprintf(`[Interface]
+Address = 10.2.0.2/32
+PrivateKey = %s
+
+[Peer]
+PublicKey = %s
+AllowedIPs = 0.0.0.0/0
+
+[Peer]
+PublicKey = %s
+PersistentKeepalive = 0
+AllowedIPs = 10.3.0.0/24
+`, ephemeralWireGuardKey(t), ephemeralWireGuardKey(t), ephemeralWireGuardKey(t))
+		err = os.WriteFile(filepath.Join(subDir, "wg.conf"), []byte(wgCfg), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Chdir(dir)
+		parsed, err := parseProfileConfig(profile.New("wgconfig", "WGConfig = sub/wg.conf\n", 18092))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(parsed.Device.Peers) != 2 {
+			t.Fatalf("peers = %d, want 2", len(parsed.Device.Peers))
+		}
+		if parsed.Device.Peers[0].KeepAlive != 25 {
+			t.Fatalf("external peer 0 KeepAlive = %d, want 25", parsed.Device.Peers[0].KeepAlive)
+		}
+		if parsed.Device.Peers[1].KeepAlive != 0 {
+			t.Fatalf("external peer 1 KeepAlive = %d, want 0", parsed.Device.Peers[1].KeepAlive)
+		}
+	})
+
+	t.Run("rejects duplicate PersistentKeepalive entries including malformed shadows", func(t *testing.T) {
+		cases := []struct {
+			name string
+			tail string
+		}{
+			{name: "valid_then_bogus", tail: "PersistentKeepalive = 15\nPersistentKeepalive = bogus\n"},
+			{name: "valid_then_empty", tail: "PersistentKeepalive = 15\nPersistentKeepalive =\n"},
+			{name: "valid_then_zero", tail: "PersistentKeepalive = 15\nPersistentKeepalive = 0\n"},
+		}
+		for _, tc := range cases {
+			t.Run("inline_"+tc.name, func(t *testing.T) {
+				cfg := sampleConfig(t) + tc.tail
+				runner := newTestRunner()
+				err := runner.Start(t.Context(), profile.New("dup-inline", cfg, 18093))
+				if !errors.Is(err, ErrConfigInvalid) {
+					t.Fatalf("Start error = %v, want ErrConfigInvalid", err)
+				}
+			})
+
+			t.Run("wgconfig_"+tc.name, func(t *testing.T) {
+				dir := t.TempDir()
+				wgPath := filepath.Join(dir, "wg.conf")
+				err := os.WriteFile(wgPath, []byte(sampleConfig(t)+tc.tail), 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				runner := newTestRunner()
+				err = runner.Start(t.Context(), profile.New("dup-wgconfig", "WGConfig = "+wgPath+"\n"+sampleConfig(t), 18094))
+				if !errors.Is(err, ErrConfigInvalid) {
+					t.Fatalf("Start error = %v, want ErrConfigInvalid", err)
 				}
 			})
 		}
@@ -714,7 +793,11 @@ func TestRunSocks5DialTimeoutAndCancellation(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		<-dialStarted
+		select {
+		case <-dialStarted:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for dial callback")
+		}
 		cancel()
 
 		select {
@@ -726,6 +809,413 @@ func TestRunSocks5DialTimeoutAndCancellation(t *testing.T) {
 			t.Fatal("dial was not canceled when runner context canceled")
 		}
 	})
+
+	t.Run("shares one dial budget across hostname resolution and dial", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		var lc net.ListenConfig
+		proxyLn, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer proxyLn.Close()
+
+		const budget = 80 * time.Millisecond
+		const resolveDelay = 45 * time.Millisecond
+
+		dialErrCh := make(chan error, 1)
+		var dialBudgetLeft time.Duration
+		runner := NewRunner()
+		runner.timeouts = socksconn.Timeouts{
+			Dial:    budget,
+			TCPIdle: time.Second,
+			Drain:   time.Second,
+			UDPIdle: time.Second,
+		}
+		runner.resolveTun = func(resolveCtx context.Context, _ *upstream.VirtualTun, _ string) (context.Context, net.IP, error) {
+			timer := time.NewTimer(resolveDelay)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				return resolveCtx, net.ParseIP("127.0.0.1"), nil
+			case <-resolveCtx.Done():
+				return nil, nil, resolveCtx.Err()
+			}
+		}
+		runner.dialTun = func(dialCtx context.Context, _ *upstream.VirtualTun, _, _ string) (net.Conn, error) {
+			deadline, ok := dialCtx.Deadline()
+			if !ok {
+				t.Error("dialCtx missing deadline")
+			} else {
+				dialBudgetLeft = time.Until(deadline)
+			}
+			<-dialCtx.Done()
+			dialErrCh <- dialCtx.Err()
+			return nil, dialCtx.Err()
+		}
+
+		go func() {
+			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+		}()
+
+		var dialer net.Dialer
+		conn, err := dialer.DialContext(ctx, "tcp", proxyLn.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+
+		_, err = conn.Write([]byte{0x05, 0x01, 0x00})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = io.ReadFull(conn, make([]byte, 2))
+		if err != nil {
+			t.Fatal(err)
+		}
+		host := []byte("example.invalid")
+		req := append([]byte{0x05, 0x01, 0x00, 0x03, byte(len(host))}, host...)
+		req = append(req, 0x00, 0x50)
+		_, err = conn.Write(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		reply := make([]byte, 10)
+		_, err = io.ReadFull(conn, reply)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reply[1] == 0x00 {
+			t.Fatalf("expected non-success reply, got %#v", reply)
+		}
+		select {
+		case err := <-dialErrCh:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("dial err = %v, want context.DeadlineExceeded", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for dial deadline")
+		}
+		if dialBudgetLeft > budget-resolveDelay+10*time.Millisecond {
+			t.Fatalf("remaining dial budget = %v, want shared budget <= %v", dialBudgetLeft, budget-resolveDelay)
+		}
+	})
+
+	t.Run("cancels hung hostname resolution when runner stops", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		var lc net.ListenConfig
+		proxyLn, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer proxyLn.Close()
+
+		resolveStarted := make(chan struct{})
+		resolveErrCh := make(chan error, 1)
+		runner := NewRunner()
+		runner.timeouts = socksconn.Timeouts{
+			Dial:    30 * time.Second,
+			TCPIdle: time.Second,
+			Drain:   time.Second,
+			UDPIdle: time.Second,
+		}
+		runner.resolveTun = func(resolveCtx context.Context, _ *upstream.VirtualTun, _ string) (context.Context, net.IP, error) {
+			close(resolveStarted)
+			<-resolveCtx.Done()
+			resolveErrCh <- resolveCtx.Err()
+			return nil, nil, resolveCtx.Err()
+		}
+
+		go func() {
+			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+		}()
+
+		var dialer net.Dialer
+		conn, err := dialer.DialContext(ctx, "tcp", proxyLn.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+
+		_, err = conn.Write([]byte{0x05, 0x01, 0x00})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = io.ReadFull(conn, make([]byte, 2))
+		if err != nil {
+			t.Fatal(err)
+		}
+		host := []byte("slow.invalid")
+		req := append([]byte{0x05, 0x01, 0x00, 0x03, byte(len(host))}, host...)
+		req = append(req, 0x00, 0x50)
+		_, err = conn.Write(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		select {
+		case <-resolveStarted:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for resolve callback")
+		}
+		cancel()
+
+		select {
+		case err := <-resolveErrCh:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("resolve ctx err = %v, want context.Canceled", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("resolve was not canceled when runner context canceled")
+		}
+	})
+}
+
+func TestRunSocks5UDPAssociateLargePayloadsIsolationAndStopCleanup(t *testing.T) {
+	t.Run("relays UDP payloads larger than 32 KiB in both directions", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		var lc net.ListenConfig
+		proxyLn, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer proxyLn.Close()
+
+		targetUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer targetUDP.Close()
+
+		var dialer net.Dialer
+		runner := NewRunner()
+		runner.dialTun = func(dialCtx context.Context, _ *upstream.VirtualTun, network, addr string) (net.Conn, error) {
+			return dialer.DialContext(dialCtx, network, addr)
+		}
+		go func() {
+			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+		}()
+
+		controlConn, relayAddr := dialSocks5UDPAssociate(t, proxyLn.Addr().String())
+		defer controlConn.Close()
+
+		udpClient, err := net.DialUDP("udp", nil, relayAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer udpClient.Close()
+
+		targetAddr := targetUDP.LocalAddr().(*net.UDPAddr)
+		payload := bytes.Repeat([]byte("A"), 40*1024)
+		pkt := []byte{0, 0, 0, 0x01, 127, 0, 0, 1, byte(targetAddr.Port >> 8), byte(targetAddr.Port)}
+		pkt = append(pkt, payload...)
+		_, err = udpClient.Write(pkt)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_ = targetUDP.SetReadDeadline(time.Now().Add(time.Second))
+		recv := make([]byte, 64*1024)
+		rn, src, err := targetUDP.ReadFromUDP(recv)
+		if err != nil {
+			t.Fatalf("target read = %v", err)
+		}
+		if !bytes.Equal(recv[:rn], payload) {
+			t.Fatalf("target received %d bytes, want %d", rn, len(payload))
+		}
+
+		replyPayload := bytes.Repeat([]byte("B"), 40*1024)
+		_, err = targetUDP.WriteToUDP(replyPayload, src)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_ = udpClient.SetReadDeadline(time.Now().Add(time.Second))
+		replyBuf := make([]byte, 64*1024)
+		cn, err := udpClient.Read(replyBuf)
+		if err != nil {
+			t.Fatalf("client read = %v", err)
+		}
+		if cn < 10 || !bytes.Equal(replyBuf[10:cn], replyPayload) {
+			t.Fatalf("client received %d payload bytes, want %d", cn-10, len(replyPayload))
+		}
+	})
+
+	t.Run("isolates per-destination expiry and write failure without tearing down association", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		var lc net.ListenConfig
+		proxyLn, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer proxyLn.Close()
+
+		targetA, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer targetA.Close()
+
+		targetB, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer targetB.Close()
+
+		var failNextWrite atomic.Bool
+		var dialer net.Dialer
+		runner := NewRunner()
+		runner.timeouts = socksconn.Timeouts{
+			Dial:    time.Second,
+			TCPIdle: time.Second,
+			Drain:   time.Second,
+			UDPIdle: 60 * time.Millisecond,
+		}
+		runner.dialTun = func(dialCtx context.Context, _ *upstream.VirtualTun, network, addr string) (net.Conn, error) {
+			c, dialErr := dialer.DialContext(dialCtx, network, addr)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			if addr == targetA.LocalAddr().String() {
+				return &failWriteConn{Conn: c, fail: &failNextWrite}, nil
+			}
+			return c, nil
+		}
+		go func() {
+			_ = runner.runSocks5(ctx, &upstream.Socks5Config{}, nil, proxyLn)
+		}()
+
+		controlConn, relayAddr := dialSocks5UDPAssociate(t, proxyLn.Addr().String())
+		defer controlConn.Close()
+
+		udpClient, err := net.DialUDP("udp", nil, relayAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer udpClient.Close()
+
+		send := func(dst *net.UDPAddr, msg string) {
+			pkt := []byte{0, 0, 0, 0x01, 127, 0, 0, 1, byte(dst.Port >> 8), byte(dst.Port)}
+			pkt = append(pkt, msg...)
+			_, wErr := udpClient.Write(pkt)
+			if wErr != nil {
+				t.Fatal(wErr)
+			}
+		}
+
+		addrA := targetA.LocalAddr().(*net.UDPAddr)
+		addrB := targetB.LocalAddr().(*net.UDPAddr)
+
+		send(addrA, "a1")
+		send(addrB, "b1")
+
+		_ = targetA.SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 64)
+		rn, _, err := targetA.ReadFromUDP(buf)
+		if err != nil || string(buf[:rn]) != "a1" {
+			t.Fatalf("targetA first read = %q, %v", buf[:rn], err)
+		}
+		_ = targetB.SetReadDeadline(time.Now().Add(time.Second))
+		rn, _, err = targetB.ReadFromUDP(buf)
+		if err != nil || string(buf[:rn]) != "b1" {
+			t.Fatalf("targetB first read = %q, %v", buf[:rn], err)
+		}
+
+		failNextWrite.Store(true)
+		send(addrA, "a-fail")
+		time.Sleep(20 * time.Millisecond)
+
+		send(addrB, "b2")
+		_ = targetB.SetReadDeadline(time.Now().Add(time.Second))
+		rn, _, err = targetB.ReadFromUDP(buf)
+		if err != nil || string(buf[:rn]) != "b2" {
+			t.Fatalf("targetB after targetA write failure = %q, %v", buf[:rn], err)
+		}
+
+		failNextWrite.Store(false)
+		send(addrA, "a-recovered")
+		_ = targetA.SetReadDeadline(time.Now().Add(time.Second))
+		rn, _, err = targetA.ReadFromUDP(buf)
+		if err != nil || string(buf[:rn]) != "a-recovered" {
+			t.Fatalf("targetA recovery = %q, %v", buf[:rn], err)
+		}
+	})
+
+	t.Run("profile stop closes accepted UDP associate control socket", func(t *testing.T) {
+		var lc net.ListenConfig
+		realLn, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		runner := NewRunner()
+		runner.listen = func(_, _ string) (net.Listener, error) {
+			return realLn, nil
+		}
+		runner.startWireguard = func(_ *upstream.Configuration, _ int) (*upstream.VirtualTun, error) {
+			return &upstream.VirtualTun{}, nil
+		}
+		runner.serveSocks5 = runner.runSocks5
+
+		p := profile.New("stop-udp", sampleConfig(t), realLn.Addr().(*net.TCPAddr).Port)
+		err = runner.Start(t.Context(), p)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		controlConn, _ := dialSocks5UDPAssociate(t, realLn.Addr().String())
+		defer controlConn.Close()
+
+		readDone := make(chan error, 1)
+		go func() {
+			_, rErr := controlConn.Read(make([]byte, 1))
+			readDone <- rErr
+		}()
+
+		if !runner.Stop(p.ID) {
+			t.Fatal("expected Stop to return true")
+		}
+
+		select {
+		case rErr := <-readDone:
+			if rErr == nil {
+				t.Fatal("expected EOF or error on control socket after profile Stop")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("accepted SOCKS5 UDP associate control socket leaked after profile Stop")
+		}
+
+		stopCtx, stopCancel := context.WithTimeout(t.Context(), time.Second)
+		defer stopCancel()
+		err = runner.StopAllAndWait(stopCtx)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+type failWriteConn struct {
+	net.Conn
+	fail *atomic.Bool
+}
+
+var errInjectedUDPWrite = errors.New("injected udp write error")
+
+func (c *failWriteConn) Write(b []byte) (int, error) {
+	if c.fail.Load() {
+		return 0, errInjectedUDPWrite
+	}
+	return c.Conn.Write(b)
 }
 
 func dialSocks5Connect(t *testing.T, proxyAddr string, target *net.TCPAddr) net.Conn {

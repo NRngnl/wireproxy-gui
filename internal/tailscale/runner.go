@@ -761,6 +761,29 @@ func (r *Runner) processes() []*process {
 
 func (r *Runner) runSocks5(ctx context.Context, node tsNode, listener net.Listener) error {
 	timeouts := r.timeouts.WithDefaults()
+	wrappedLn := socksconn.WrapListener(listener, timeouts.TCPIdle, timeouts.Drain)
+	stop := context.AfterFunc(ctx, func() {
+		_ = wrappedLn.Close()
+	})
+	defer stop()
+
+	var assocWG sync.WaitGroup
+	defer assocWG.Wait()
+
+	dialFn := func(reqCtx context.Context, network, addr string) (net.Conn, error) {
+		dialCtx, cancel := socksconn.DialContext(ctx, reqCtx, timeouts.Dial)
+		defer cancel()
+		conn, err := node.Dial(dialCtx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(network, "udp") {
+			return socksconn.WrapUDP(conn, timeouts.UDPIdle), nil
+		}
+		return socksconn.WrapTCP(socksReplyConn{Conn: conn}, timeouts.TCPIdle, timeouts.Drain), nil
+	}
+
+	assocHandle := socksconn.AssociateHandler(ctx, dialFn)
 
 	server := socks5.NewServer(
 		socks5.WithResolver(noResolve{}),
@@ -775,17 +798,11 @@ func (r *Runner) runSocks5(ctx context.Context, node tsNode, listener net.Listen
 		}),
 		// NOTE: WithDial backs SOCKS5 UDP ASSOCIATE (go-socks5's handleAssociate reads
 		// only WithDial, never WithDialAndRequest).
-		socks5.WithDial(func(reqCtx context.Context, network, addr string) (net.Conn, error) {
-			dialCtx, cancel := socksconn.DialContext(ctx, reqCtx, timeouts.Dial)
-			defer cancel()
-			conn, err := node.Dial(dialCtx, network, addr)
-			if err != nil {
-				return nil, err
-			}
-			if strings.HasPrefix(network, "udp") {
-				return socksconn.WrapUDP(conn, timeouts.UDPIdle), nil
-			}
-			return socksconn.WrapTCP(socksReplyConn{Conn: conn}, timeouts.TCPIdle, timeouts.Drain), nil
+		socks5.WithDial(dialFn),
+		socks5.WithAssociateHandle(func(reqCtx context.Context, writer io.Writer, request *socks5.Request) error {
+			assocWG.Add(1)
+			defer assocWG.Done()
+			return assocHandle(reqCtx, writer, request)
 		}),
 		socks5.WithAssociateMiddleware(func(_ context.Context, writer io.Writer, _ *socks5.Request) error {
 			if c, ok := writer.(interface{ ClearIdleTimeout() error }); ok {
@@ -796,7 +813,7 @@ func (r *Runner) runSocks5(ctx context.Context, node tsNode, listener net.Listen
 		socks5.WithRule(socks5.NewPermitConnAndAss()),
 		socks5.WithBufferPool(bufferpool.NewPool(socksconn.BufferSize)),
 	)
-	return server.Serve(socksconn.WrapListener(listener, timeouts.TCPIdle, timeouts.Drain))
+	return server.Serve(wrappedLn)
 }
 
 // startPortForwards binds a listener (TCP) or packet conn (UDP) for every
@@ -864,7 +881,7 @@ func selfTailscaleIP(status *ipnstate.Status) (netip.Addr, error) {
 // It emits EventError for operational failures that are not due to context
 // cancellation or a closed listener.
 func (r *Runner) relayTCPForward(ctx context.Context, _ tsNode, listener net.Listener, rule profile.PortForward, profileID, profileName string) {
-	dialTimeout := r.timeouts.WithDefaults().Dial
+	timeouts := r.timeouts.WithDefaults()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -874,13 +891,13 @@ func (r *Runner) relayTCPForward(ctx context.Context, _ tsNode, listener net.Lis
 			r.emitForwardError(rule, err, profileID, profileName)
 			return
 		}
-		go relayTCPConn(ctx, conn, rule.TargetAddr, dialTimeout)
+		go relayTCPConn(ctx, conn, rule.TargetAddr, timeouts)
 	}
 }
 
-func relayTCPConn(ctx context.Context, conn net.Conn, targetAddr string, dialTimeout time.Duration) {
+func relayTCPConn(ctx context.Context, conn net.Conn, targetAddr string, timeouts socksconn.Timeouts) {
 	defer conn.Close()
-	dialCtx, cancel := socksconn.DialContext(ctx, ctx, dialTimeout)
+	dialCtx, cancel := socksconn.DialContext(ctx, ctx, timeouts.Dial)
 	var dialer net.Dialer
 	target, err := dialer.DialContext(dialCtx, "tcp", targetAddr)
 	cancel()
@@ -889,30 +906,40 @@ func relayTCPConn(ctx context.Context, conn net.Conn, targetAddr string, dialTim
 	}
 	defer target.Close()
 
+	wrappedConn := socksconn.WrapTCP(conn, timeouts.TCPIdle, timeouts.Drain)
+	wrappedTarget := socksconn.WrapTCP(target, timeouts.TCPIdle, timeouts.Drain)
+
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = conn.Close()
-			_ = target.Close()
+			_ = wrappedConn.Close()
+			_ = wrappedTarget.Close()
 		case <-done:
 		}
 	}()
 
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(target, conn)
-		_ = target.Close()
-	}()
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(conn, target)
-		_ = conn.Close()
-	}()
+	wg.Go(func() {
+		_, _ = io.Copy(wrappedTarget, wrappedConn)
+		closeWriteOrClose(wrappedTarget, target)
+	})
+	wg.Go(func() {
+		_, _ = io.Copy(wrappedConn, wrappedTarget)
+		closeWriteOrClose(wrappedConn, conn)
+	})
 	wg.Wait()
 	close(done)
+}
+
+func closeWriteOrClose(wrapped, raw net.Conn) {
+	if _, ok := raw.(interface{ CloseWrite() error }); ok {
+		if cw, ok := wrapped.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+			return
+		}
+	}
+	_ = wrapped.Close()
 }
 
 func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.PacketConn, rule profile.PortForward, profileID, profileName string) {
@@ -987,8 +1014,14 @@ func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.P
 			replyBuf := make([]byte, 64*1024)
 			for {
 				rn, readErr := session.conn.Read(replyBuf)
-				if rn > 0 {
-					_, _ = packetConn.WriteTo(replyBuf[:rn], source)
+				if rn > 0 || readErr == nil {
+					_, writeErr := packetConn.WriteTo(replyBuf[:rn], source)
+					if writeErr != nil {
+						if ctx.Err() == nil && !errors.Is(writeErr, net.ErrClosed) {
+							r.emitForwardError(rule, writeErr, profileID, profileName)
+						}
+						return
+					}
 				}
 				if readErr != nil {
 					return

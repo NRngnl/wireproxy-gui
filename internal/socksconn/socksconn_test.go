@@ -188,6 +188,126 @@ func TestConnIdleAndHalfCloseBehavior(t *testing.T) {
 			t.Fatalf("closeWrite error = %v, want %v", err, errDeadlineBoom)
 		}
 	})
+
+	t.Run("blocked write times out while reads stay active", func(t *testing.T) {
+		client, remote := net.Pipe()
+		defer client.Close()
+		defer remote.Close()
+
+		conn := WrapTCP(client, 60*time.Millisecond, 200*time.Millisecond)
+
+		stopReads := make(chan struct{})
+		defer close(stopReads)
+		go func() {
+			ticker := time.NewTicker(15 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopReads:
+					return
+				case <-ticker.C:
+					_, err := remote.Write([]byte("r"))
+					if err != nil {
+						return
+					}
+				}
+			}
+		}()
+
+		go func() {
+			buf := make([]byte, 8)
+			for {
+				_, err := conn.Read(buf)
+				if err != nil {
+					return
+				}
+			}
+		}()
+
+		writeErr := make(chan error, 1)
+		go func() {
+			_, err := conn.Write([]byte("blocked"))
+			writeErr <- err
+		}()
+
+		select {
+		case err := <-writeErr:
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("blocked write = %v, want os.ErrDeadlineExceeded", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("blocked write did not time out while reads were active")
+		}
+	})
+
+	t.Run("drain deadline bounds blocked write", func(t *testing.T) {
+		client, remote := net.Pipe()
+		defer client.Close()
+		defer remote.Close()
+
+		conn := WrapTCP(client, 500*time.Millisecond, 60*time.Millisecond).(*Conn)
+		err := conn.CloseWrite()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		writeErr := make(chan error, 1)
+		go func() {
+			_, err := conn.Write([]byte("blocked-after-closewrite"))
+			writeErr <- err
+		}()
+
+		select {
+		case err := <-writeErr:
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("write during drain = %v, want os.ErrDeadlineExceeded", err)
+			}
+		case <-time.After(300 * time.Millisecond):
+			t.Fatal("blocked write was not bounded by drain deadline")
+		}
+	})
+
+	t.Run("coalesced write activity counts full inactivity before read expires", func(t *testing.T) {
+		client, remote := newLoopbackTCPPair(t)
+		defer remote.Close()
+
+		go func() {
+			buf := make([]byte, 64)
+			for {
+				_, err := remote.Read(buf)
+				if err != nil {
+					return
+				}
+			}
+		}()
+
+		const idle = 160 * time.Millisecond
+		conn := WrapTCP(client, idle, time.Second)
+		readErr := make(chan error, 1)
+		go func() {
+			_, err := conn.Read(make([]byte, 1))
+			readErr <- err
+		}()
+
+		time.Sleep(30 * time.Millisecond)
+		_, err := conn.Write([]byte("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lastWrite := time.Now()
+
+		select {
+		case err := <-readErr:
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("read = %v, want os.ErrDeadlineExceeded", err)
+			}
+			if elapsed := time.Since(lastWrite); elapsed < idle-10*time.Millisecond {
+				t.Fatalf("read expired early after %v of inactivity, want at least %v", elapsed, idle)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("read did not time out after inactivity")
+		}
+	})
 }
 
 func TestWrapListenerWrapsAcceptedConnsAndEnablesKeepAlive(t *testing.T) {
@@ -229,6 +349,55 @@ func TestWrapListenerWrapsAcceptedConnsAndEnablesKeepAlive(t *testing.T) {
 	_ = WrapTCP(kaConn, time.Second, time.Second)
 	if !kaConn.keepAlive || kaConn.period != keepAlivePeriod {
 		t.Fatalf("keepAlive=%v period=%v, want true %v", kaConn.keepAlive, kaConn.period, keepAlivePeriod)
+	}
+}
+
+func TestWrapListenerCloseClosesAcceptedConns(t *testing.T) {
+	ctx := t.Context()
+	rawLn, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := WrapListener(rawLn, time.Second, time.Second)
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, acceptErr := ln.Accept()
+		if acceptErr == nil {
+			accepted <- c
+		}
+	}()
+
+	client, err := (&net.Dialer{}).DialContext(ctx, "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	serverConn := <-accepted
+	err = serverConn.(*Conn).ClearIdleTimeout()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readErr := make(chan error, 1)
+	go func() {
+		_, rErr := serverConn.Read(make([]byte, 1))
+		readErr <- rErr
+	}()
+
+	err = ln.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-readErr:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("accepted conn read after listener close = %v, want net.ErrClosed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("accepted conn remained open after WrapListener.Close")
 	}
 }
 

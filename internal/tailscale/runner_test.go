@@ -32,6 +32,7 @@ var (
 	errForwardListen          = errors.New("forward listen failed")
 	errTestTCPAcceptFailed    = errors.New("boom: accept failed")
 	errTestUDPReadFromFailed  = errors.New("boom: read from failed")
+	errTestUDPWriteFailed     = errors.New("boom: write to failed")
 )
 
 func TestStartRejectsWireGuardProfile(t *testing.T) {
@@ -1702,6 +1703,376 @@ func TestRunSocks5RoutesUDPAssociateThroughNode(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("runSocks5 did not stop")
 	}
+}
+
+func TestRunSocks5StopClosesUDPAssociateControlSocket(t *testing.T) {
+	var lc net.ListenConfig
+	realLn, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner()
+	runner.listen = func(_, _ string) (net.Listener, error) {
+		return realLn, nil
+	}
+	runner.newNode = func(_ profile.Profile, _ string, _ func(string, ...any)) (tsNode, error) {
+		return &fakeTSNode{
+			client: &fakeLocalClient{prefs: ipn.NewPrefs(), status: &ipnstate.Status{}},
+		}, nil
+	}
+
+	p := profile.NewTailscale("stop-udp", realLn.Addr().(*net.TCPAddr).Port)
+	err = runner.Start(t.Context(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var dialer net.Dialer
+	controlConn, err := dialer.DialContext(t.Context(), "tcp", realLn.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlConn.Close()
+	_ = controlConn.SetDeadline(time.Now().Add(time.Second))
+
+	_, err = controlConn.Write([]byte{0x05, 0x01, 0x00})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.ReadFull(controlConn, make([]byte, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = controlConn.Write([]byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assocReply := make([]byte, 10)
+	_, err = io.ReadFull(controlConn, assocReply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assocReply[1] != 0x00 {
+		t.Fatalf("UDP associate reply = %#v, want success", assocReply)
+	}
+	_ = controlConn.SetDeadline(time.Time{})
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, rErr := controlConn.Read(make([]byte, 1))
+		readDone <- rErr
+	}()
+
+	if !runner.Stop(p.ID) {
+		t.Fatal("expected Stop to return true")
+	}
+
+	select {
+	case rErr := <-readDone:
+		if rErr == nil {
+			t.Fatal("expected EOF or error on control socket after profile Stop")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("accepted SOCKS5 UDP associate control socket leaked after profile Stop")
+	}
+
+	stopCtx, stopCancel := context.WithTimeout(t.Context(), time.Second)
+	defer stopCancel()
+	err = runner.StopAllAndWait(stopCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRelayTCPForwardHalfCloseAndDrain(t *testing.T) {
+	t.Run("propagates client half-close and delivers delayed reply", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		var lc net.ListenConfig
+		fwdLn, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer fwdLn.Close()
+
+		targetLn, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer targetLn.Close()
+
+		go func() {
+			conn, acceptErr := targetLn.Accept()
+			if acceptErr != nil {
+				return
+			}
+			defer conn.Close()
+			_, _ = io.ReadAll(conn)
+			time.Sleep(30 * time.Millisecond)
+			_, _ = conn.Write([]byte("delayed-reply"))
+		}()
+
+		runner := NewRunner()
+		rule := profile.PortForward{
+			Protocol:   profile.PortForwardTCP,
+			TargetAddr: targetLn.Addr().String(),
+		}
+		go runner.relayTCPForward(ctx, nil, fwdLn, rule, "p-tcp-halfclose", "TCP HalfClose")
+
+		var dialer net.Dialer
+		clientConn, err := dialer.DialContext(ctx, "tcp", fwdLn.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clientConn.Close()
+		_ = clientConn.SetDeadline(time.Now().Add(time.Second))
+
+		_, err = clientConn.Write([]byte("request"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = clientConn.(*net.TCPConn).CloseWrite()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		reply, err := io.ReadAll(clientConn)
+		if err != nil {
+			t.Fatalf("read delayed reply = %v", err)
+		}
+		if string(reply) != "delayed-reply" {
+			t.Fatalf("reply = %q, want delayed-reply", reply)
+		}
+	})
+
+	t.Run("bounds drain after client half-close", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		var lc net.ListenConfig
+		fwdLn, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer fwdLn.Close()
+
+		targetLn, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer targetLn.Close()
+
+		holdTarget := make(chan struct{})
+		defer close(holdTarget)
+		go func() {
+			conn, acceptErr := targetLn.Accept()
+			if acceptErr != nil {
+				return
+			}
+			defer conn.Close()
+			_, _ = io.Copy(io.Discard, conn)
+			<-holdTarget
+		}()
+
+		runner := NewRunner()
+		runner.timeouts = socksconn.Timeouts{
+			Dial:    time.Second,
+			TCPIdle: 600 * time.Millisecond,
+			Drain:   60 * time.Millisecond,
+			UDPIdle: time.Second,
+		}
+		rule := profile.PortForward{
+			Protocol:   profile.PortForwardTCP,
+			TargetAddr: targetLn.Addr().String(),
+		}
+		go runner.relayTCPForward(ctx, nil, fwdLn, rule, "p-tcp-drain", "TCP Drain")
+
+		var dialer net.Dialer
+		clientConn, err := dialer.DialContext(ctx, "tcp", fwdLn.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clientConn.Close()
+		_ = clientConn.SetDeadline(time.Now().Add(300 * time.Millisecond))
+
+		_, err = clientConn.Write([]byte("req"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = clientConn.(*net.TCPConn).CloseWrite()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = clientConn.Read(make([]byte, 1))
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("client read after drain = %v, want io.EOF before TCPIdle", err)
+		}
+	})
+}
+
+func TestRelayUDPForwardEmptyRepliesAndWriteFailureIsolation(t *testing.T) {
+	t.Run("forwards successful empty reply datagrams", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		fwdConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer fwdConn.Close()
+
+		targetConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer targetConn.Close()
+
+		runner := NewRunner()
+		rule := profile.PortForward{
+			Protocol:   profile.PortForwardUDP,
+			TargetAddr: targetConn.LocalAddr().String(),
+		}
+		go runner.relayUDPForward(ctx, nil, fwdConn, rule, "p-udp-empty", "UDP Empty")
+
+		sourceConn, err := net.DialUDP("udp", nil, fwdConn.LocalAddr().(*net.UDPAddr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sourceConn.Close()
+
+		_, err = sourceConn.Write([]byte("ping"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_ = targetConn.SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 16)
+		_, relaySrc, err := targetConn.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = targetConn.WriteToUDP([]byte{}, relaySrc)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_ = sourceConn.SetReadDeadline(time.Now().Add(time.Second))
+		rn, err := sourceConn.Read(buf)
+		if err != nil {
+			t.Fatalf("source read empty reply = %v", err)
+		}
+		if rn != 0 {
+			t.Fatalf("reply length = %d, want 0", rn)
+		}
+	})
+
+	t.Run("reports reply write failure without stopping unrelated sessions", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		rawFwd, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rawFwd.Close()
+
+		targetConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer targetConn.Close()
+
+		sourceA, err := net.DialUDP("udp", nil, rawFwd.LocalAddr().(*net.UDPAddr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sourceA.Close()
+
+		sourceB, err := net.DialUDP("udp", nil, rawFwd.LocalAddr().(*net.UDPAddr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sourceB.Close()
+
+		fwdConn := &failAddrPacketConn{
+			PacketConn: rawFwd,
+			failAddr:   sourceA.LocalAddr().String(),
+			err:        errTestUDPWriteFailed,
+		}
+
+		runner := NewRunner()
+		rule := profile.PortForward{
+			ListenPort: 9010,
+			Protocol:   profile.PortForwardUDP,
+			TargetAddr: targetConn.LocalAddr().String(),
+		}
+		go runner.relayUDPForward(ctx, nil, fwdConn, rule, "p-udp-write-err", "UDP WriteErr")
+
+		_, err = sourceA.Write([]byte("from-a"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = targetConn.SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 32)
+		_, relayAddrA, err := targetConn.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = sourceB.Write([]byte("from-b"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = targetConn.SetReadDeadline(time.Now().Add(time.Second))
+		_, relayAddrB, err := targetConn.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = targetConn.WriteToUDP([]byte("reply-a"), relayAddrA)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		select {
+		case event := <-runner.Events():
+			if event.Type != EventError || !strings.Contains(event.Message, errTestUDPWriteFailed.Error()) {
+				t.Fatalf("event = %#v, want EventError with %v", event, errTestUDPWriteFailed)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for EventError from reply WriteTo failure")
+		}
+
+		_, err = targetConn.WriteToUDP([]byte("reply-b"), relayAddrB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = sourceB.SetReadDeadline(time.Now().Add(time.Second))
+		bn, err := sourceB.Read(buf)
+		if err != nil {
+			t.Fatalf("unrelated session B failed after session A write error: %v", err)
+		}
+		if string(buf[:bn]) != "reply-b" {
+			t.Fatalf("session B got %q, want reply-b", buf[:bn])
+		}
+	})
+}
+
+type failAddrPacketConn struct {
+	net.PacketConn
+	failAddr string
+	err      error
+}
+
+func (c *failAddrPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	if addr != nil && addr.String() == c.failAddr {
+		return 0, c.err
+	}
+	return c.PacketConn.WriteTo(p, addr)
 }
 
 type fakeTSNode struct {
