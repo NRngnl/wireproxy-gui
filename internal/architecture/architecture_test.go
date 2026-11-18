@@ -27,10 +27,11 @@ func TestInternalDependenciesPointInward(t *testing.T) {
 		"profilejson": {"application", "profile"},
 		"runner":      {"connection", "profile"},
 		"svcinstall":  {"lock", "profilejson", "profile"},
-		"tailscale":   {"connection", "profile"},
+		"socksconn":   {},
+		"tailscale":   {"connection", "profile", "socksconn"},
 		"tui":         {"application", "buildinfo", "connection", "profile", "tui/screens", "svcinstall"},
 		"ui":          {"application", "buildinfo", "connection", "profile", "svcinstall"},
-		"wireproxy":   {"connection", "profile"},
+		"wireproxy":   {"connection", "profile", "socksconn"},
 	}
 
 	for packageName, allowed := range rules {
