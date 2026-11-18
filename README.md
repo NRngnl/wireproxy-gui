@@ -241,7 +241,9 @@ connected, disconnecting, or error. Runtime fields are locked while a profile is
 active; disconnect the profile before changing backend, SOCKS5 bind, WireGuard
 config, or Tailscale auth settings. Tailscale exit-node settings can be changed
 while connected; click Save to apply the new exit-node preference to the running
-embedded node.
+embedded node. When a specific Tailscale exit node is configured, connecting waits
+up to five seconds for tailnet peers to appear in the embedded node status before
+applying the exit node and starting the SOCKS5 listener.
 
 For Tailscale profiles, paste an auth key and click Login or Connect to register
 the embedded `tsnet` node. Leave the auth key empty to use the browser sign-in
