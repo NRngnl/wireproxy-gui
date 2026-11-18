@@ -237,6 +237,8 @@ For example, TCP `127.0.0.1:2222` to `remote-pc:22` lets
 - Rules can be added, edited, removed and retried while the profile is
   connected, without reconnecting. Unchanged rules keep their live sessions.
   Removing a rule closes the connections that use it.
+- In the terminal UI, press `f` on a profile to open its local forwards: `a` add,
+  `e` edit, `d` remove, `r` retry, `esc` back.
 - Timeouts match SOCKS5: 30 seconds to dial, 5 minutes TCP idle, 60 seconds to
   drain a half-close and 60 seconds UDP session idle.
 - Rules are stored as `local_forwards` in the profile JSON. Older versions

@@ -181,8 +181,25 @@ func (f *fakeApplication) DisconnectAll() {
 func (f *fakeApplication) ExitNodes(context.Context, string) ([]connection.ExitNode, error) {
 	return nil, nil
 }
-func (f *fakeApplication) Logout(context.Context, string) error { return nil }
-func (f *fakeApplication) Shutdown(context.Context) error       { return nil }
+func (f *fakeApplication) AddLocalForward(context.Context, string, profile.LocalForward) error {
+	return nil
+}
+
+func (f *fakeApplication) UpdateLocalForward(context.Context, string, profile.LocalForwardKey, profile.LocalForward) error {
+	return nil
+}
+
+func (f *fakeApplication) RemoveLocalForward(context.Context, string, profile.LocalForwardKey) error {
+	return nil
+}
+
+func (f *fakeApplication) RetryLocalForward(context.Context, string, profile.LocalForwardKey) error {
+	return nil
+}
+
+func (f *fakeApplication) LocalForwardStates(string) []application.LocalForwardState { return nil }
+func (f *fakeApplication) Logout(context.Context, string) error                      { return nil }
+func (f *fakeApplication) Shutdown(context.Context) error                            { return nil }
 
 var _ Application = (*fakeApplication)(nil)
 
@@ -807,3 +824,19 @@ func TestLoginKeyCallsLoginDirectly(t *testing.T) {
 
 var errSaveFailed = errors.New("save failed")
 var errBoom = errors.New("boom")
+
+func TestForwardsKeyOpensAndEscClosesLocalForwards(t *testing.T) {
+	item := newTestProfile("alpha", 1080)
+	item.LocalForwards = []profile.LocalForward{{Protocol: profile.PortForwardTCP, ListenAddr: "127.0.0.1:2222", TargetAddr: "pc:22"}}
+	m := newModel(newFakeApplication(item), nil)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	m = updated.(*model)
+	if m.mode != modeForwards || !contains(m.View(), "127.0.0.1:2222") || !contains(m.View(), "saved, not connected") {
+		t.Fatalf("mode=%v view=%q", m.mode, m.View())
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if updated.(*model).mode != modeList {
+		t.Fatal("esc did not return to the list")
+	}
+}

@@ -34,6 +34,7 @@ const (
 	modeImportExport
 	modeHelp
 	modeService
+	modeForwards
 )
 
 // importExportKind distinguishes the two uses of the shared path-prompt
@@ -81,6 +82,7 @@ type model struct {
 	confirmKind       confirmKind
 	exitNode          *screens.ExitNodePicker
 	exitNodeProfileID string
+	forwards          *screens.LocalForwardsPanel
 	pathPrompt        *screens.PathPrompt
 	importExport      importExportKind
 
@@ -297,8 +299,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyLayout()
 		return m, nil
 
+	case forwardResultMsg:
+		m.applyForwardResult(msg)
+		return m, nil
+
 	case changeMsg:
 		m.refreshList()
+		m.refreshForwards()
 		if msg.change.ProfileID != "" && msg.change.ProfileID == m.list.selectedID {
 			m.handleLogChange()
 		}
@@ -376,6 +383,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearTransientMessages()
 			m.mode = modeHelp
 			return m, nil
+		case key.Matches(msg, keys.Forwards):
+			return m.openForwards()
 		case key.Matches(msg, keys.Service):
 			return m.openServicePanel()
 		}
@@ -434,6 +443,8 @@ func (m *model) updateActiveMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateHelp(msg)
 	case modeService:
 		return m.updateService(msg)
+	case modeForwards:
+		return m.updateForwards(msg)
 	}
 	return m, nil
 }
@@ -448,6 +459,7 @@ func (m *model) closeModal() {
 	m.exitNodeProfileID = ""
 	m.pathPrompt = nil
 	m.serviceModel = nil
+	m.forwards = nil
 }
 
 // openServicePanel opens the per-user login-service status/install panel
@@ -972,6 +984,8 @@ func (m *model) modalView() (string, bool) {
 		return titleStyle.Render("Wireproxy GUI — Exit node") + "\n\n" + m.exitNode.View(), true
 	case modeImportExport:
 		return titleStyle.Render("Wireproxy GUI — Path") + "\n\n" + m.pathPrompt.View(), true
+	case modeForwards:
+		return titleStyle.Render("Wireproxy GUI — Local forwards") + "\n\n" + m.forwards.View(), true
 	case modeService:
 		return titleStyle.Render("Wireproxy GUI — Start on Login") + "\n\n" + m.serviceModel.View(), true
 	}
