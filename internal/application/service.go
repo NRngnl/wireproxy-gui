@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -868,5 +869,9 @@ func nextAvailableImportPort(usedPorts map[int]bool, start int) (int, bool) {
 }
 
 func cloneProfiles(profiles []profile.Profile) []profile.Profile {
-	return append([]profile.Profile(nil), profiles...)
+	out := append([]profile.Profile(nil), profiles...)
+	for i := range out {
+		out[i].LocalForwards = slices.Clone(out[i].LocalForwards)
+	}
+	return out
 }

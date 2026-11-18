@@ -216,5 +216,10 @@
   "Target must look like host:port, for example remote-pc:22": "Target must look like host:port, for example remote-pc:22",
   "Target port must be a number from 1 to 65535": "Target port must be a number from 1 to 65535",
   "A forward with this protocol and listen address already exists": "A forward with this protocol and listen address already exists",
-  "Port {{.Port}} is already used by another app. Pick another port or close that app, then Retry.": "Port {{.Port}} is already used by another app. Pick another port or close that app, then Retry."
+  "Port {{.Port}} is already used by another app. Pick another port or close that app, then Retry.": "Port {{.Port}} is already used by another app. Pick another port or close that app, then Retry.",
+  "local forward listen address must be an IP address and port": "local forward listen address must be an IP address and port",
+  "local forward target must be host:port": "local forward target must be host:port",
+  "duplicate local forward listen address": "duplicate local forward listen address",
+  "local forward listen address clashes with the SOCKS5 bind address": "local forward listen address clashes with the SOCKS5 bind address",
+  "port in use": "port in use"
 }
