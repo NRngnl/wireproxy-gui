@@ -295,3 +295,18 @@ func (f *fakeApplication) Shutdown(context.Context) error {
 }
 
 var _ Application = (*fakeApplication)(nil)
+
+func (*fakeApplication) AddLocalForward(context.Context, string, profile.LocalForward) error {
+	return nil
+}
+func (*fakeApplication) UpdateLocalForward(context.Context, string, profile.LocalForwardKey, profile.LocalForward) error {
+	return nil
+}
+func (*fakeApplication) RemoveLocalForward(context.Context, string, profile.LocalForwardKey) error {
+	return nil
+}
+func (*fakeApplication) RetryLocalForward(context.Context, string, profile.LocalForwardKey) error {
+	return nil
+}
+func (*fakeApplication) LocalForwardStates(string) []application.LocalForwardState { return nil }
+func (*fakeApplication) LocalForwardTargets(string) []string                       { return nil }

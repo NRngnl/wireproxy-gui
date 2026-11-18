@@ -71,6 +71,24 @@ type TailscaleConfig struct {
 	PortForwards           []PortForward
 }
 
+// LocalForward relays a host listen address to a target reached through the backend.
+type LocalForward struct {
+	Protocol   PortForwardProtocol
+	ListenAddr string
+	TargetAddr string
+}
+
+// LocalForwardKey identifies a local forward within one profile.
+type LocalForwardKey struct {
+	Protocol   PortForwardProtocol
+	ListenAddr string
+}
+
+// Key returns the identity of the rule.
+func (f LocalForward) Key() LocalForwardKey {
+	return LocalForwardKey{Protocol: f.Protocol, ListenAddr: f.ListenAddr}
+}
+
 type Profile struct {
 	ID              string
 	Kind            BackendKind
@@ -79,6 +97,7 @@ type Profile struct {
 	TailscaleConfig TailscaleConfig
 	SocksHost       string
 	SocksPort       int
+	LocalForwards   []LocalForward
 	AutoStart       bool
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
