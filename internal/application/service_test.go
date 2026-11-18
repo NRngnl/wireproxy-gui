@@ -660,6 +660,8 @@ func (r *fakeRuntime) ApplyLocalForwards(_ context.Context, _ string, next []pro
 	return nil
 }
 
+func (*fakeRuntime) LocalForwardTargets(string) []string { return nil }
+
 func (*fakeRuntime) RetryLocalForward(string, profile.LocalForwardKey) {}
 
 func (r *fakeRuntime) LocalForwardStates(string) []connection.LocalForwardState {

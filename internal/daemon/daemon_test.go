@@ -59,6 +59,8 @@ func (f *fakeApp) AutoConnect() error {
 	return f.autoConnectErr
 }
 
+func (*fakeApp) LocalForwardStates(string) []application.LocalForwardState { return nil }
+
 func (f *fakeApp) Changes() <-chan application.Change {
 	return f.changes
 }

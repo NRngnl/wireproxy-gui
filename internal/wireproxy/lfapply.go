@@ -87,3 +87,6 @@ func (r *Runner) LocalForwardStates(profileID string) []localforward.State {
 	}
 	return set.States()
 }
+
+// LocalForwardTargets returns no suggestions: WireGuard has no peer directory.
+func (*Runner) LocalForwardTargets(string) []string { return nil }

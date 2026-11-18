@@ -20,6 +20,7 @@ type Backend interface {
 	ApplyLocalForwards(context.Context, string, []profile.LocalForward) error
 	RetryLocalForward(profileID string, key profile.LocalForwardKey)
 	LocalForwardStates(profileID string) []connection.LocalForwardState
+	LocalForwardTargets(profileID string) []string
 	Start(context.Context, profile.Profile) error
 	Stop(profileID string) bool
 	StopAll()
@@ -124,6 +125,10 @@ func (r *Runner) RetryLocalForward(profileID string, key profile.LocalForwardKey
 
 func (r *Runner) LocalForwardStates(profileID string) []connection.LocalForwardState {
 	return r.owner(profileID).LocalForwardStates(profileID)
+}
+
+func (r *Runner) LocalForwardTargets(profileID string) []string {
+	return r.owner(profileID).LocalForwardTargets(profileID)
 }
 
 func (r *Runner) owner(profileID string) Backend {

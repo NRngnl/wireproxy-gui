@@ -49,6 +49,7 @@ type Runtime interface {
 	ApplyLocalForwards(context.Context, string, []profile.LocalForward) error
 	RetryLocalForward(profileID string, key profile.LocalForwardKey)
 	LocalForwardStates(profileID string) []connection.LocalForwardState
+	LocalForwardTargets(profileID string) []string
 	Start(context.Context, profile.Profile) error
 	Stop(profileID string) bool
 	StopAll()
@@ -215,12 +216,6 @@ func (s *Service) Add(name string) (profile.Profile, error) {
 }
 
 func (s *Service) Save(updated profile.Profile) (SaveResult, error) {
-	updated.Normalize()
-	err := updated.Validate()
-	if err != nil {
-		return SaveResult{}, err
-	}
-
 	s.mu.Lock()
 	index := s.profileIndexLocked(updated.ID)
 	if index < 0 {
@@ -228,6 +223,13 @@ func (s *Service) Save(updated profile.Profile) (SaveResult, error) {
 		return SaveResult{}, ErrProfileNotFound
 	}
 	existing := s.profiles[index]
+	updated.LocalForwards = slices.Clone(existing.LocalForwards)
+	updated.Normalize()
+	err := updated.Validate()
+	if err != nil {
+		s.mu.Unlock()
+		return SaveResult{}, err
+	}
 	locked := s.runtimeLockedLocked(existing.ID)
 	if locked && profile.RuntimeConfigChanged(existing, updated) {
 		s.mu.Unlock()
@@ -701,8 +703,14 @@ func (s *Service) handleRuntimeEvent(event connection.Event) {
 	case connection.EventError:
 		s.statuses[event.ProfileID] = StatusError
 	}
-	s.appendLogLocked(event.ProfileID, event.At, event.Message)
+	if event.Message != "" {
+		s.appendLogLocked(event.ProfileID, event.At, event.Message)
+	}
+	rules := slices.Clone(s.profiles[s.profileIndexLocked(event.ProfileID)].LocalForwards)
 	s.mu.Unlock()
+	if event.Type == connection.EventStarted && s.runtime != nil {
+		_ = s.runtime.ApplyLocalForwards(s.ctx, event.ProfileID, rules)
+	}
 	s.notify(Change{ProfileID: event.ProfileID, RuntimeEvent: event.Type})
 	if authErr != nil {
 		s.notify(Change{ProfileID: event.ProfileID, Operation: OperationSave, Err: authErr})

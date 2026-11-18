@@ -19,6 +19,8 @@ as `127.0.0.1:1080`.
 - Import and export JSON profile bundles.
 - Run multiple profiles at the same time with separate SOCKS5 bind addresses.
 - Connect or disconnect one profile, or connect/disconnect every saved profile.
+- Forward local TCP and UDP ports to targets reached through a profile, like
+  `ssh -L` (see [Local Forwards](#local-forwards)).
 - Show profile status in the sidebar and tray menu.
 - Show the SOCKS5 bind address and backend detail for each profile.
 - Register an embedded Tailscale device with an auth key or browser sign-in.
@@ -208,6 +210,40 @@ IP address manually. Automatic exit asks Tailscale to choose an available exit
 node. While connected, change the exit-node mode, selected node, or LAN access
 setting and click Save to apply it without reconnecting.
 
+## Local Forwards
+
+A local forward listens on this computer and relays each connection through a
+connected profile to a target, like `ssh -L`. The relay runs in the embedded
+backend's userspace network stack: no SOCKS5 hop, no host DNS, no host routing,
+no kernel TUN, no root.
+
+For example, TCP `127.0.0.1:2222` to `remote-pc:22` lets
+`ssh -p 2222 user@127.0.0.1` reach `remote-pc` through the profile.
+
+- Each rule has a protocol (TCP or UDP), a listen address and a target
+  `host:port`. A rule is identified by its protocol and listen address. A bare
+  listen port means `127.0.0.1`. The listen address must be an IP address;
+  `::1`, `0.0.0.0`, `::` or a specific local IP are allowed.
+- Tailscale targets: a MagicDNS full name, an unambiguous short name, a peer's
+  Tailscale IP, or an IP inside a subnet route advertised by an online peer.
+  Names are never resolved by the host. A target that matches no peer or route
+  fails closed. If the tailnet has no peers yet, the dial waits up to 5 seconds.
+- WireGuard targets: an IP address, or a name when the WireGuard config sets
+  `DNS`. A name with no `DNS` fails with a clear error instead of using the host
+  resolver.
+- A listen address that is already in use gives that rule an error state
+  ("port in use"). The profile and the other rules keep running. Change the rule
+  or use Retry.
+- Rules can be added, edited, removed and retried while the profile is
+  connected, without reconnecting. Unchanged rules keep their live sessions.
+  Removing a rule closes the connections that use it.
+- Timeouts match SOCKS5: 30 seconds to dial, 5 minutes TCP idle, 60 seconds to
+  drain a half-close and 60 seconds UDP session idle.
+- Rules are stored as `local_forwards` in the profile JSON. Older versions
+  ignore the key, so a downgrade drops the rules.
+- The daemon applies rules from the store when it connects a profile. Edits made
+  in another frontend reach it after a reload or restart.
+
 ## Import And Export
 
 Import accepts:
@@ -270,6 +306,9 @@ seconds of inactivity.
 - Prefer binding SOCKS5 listeners to `127.0.0.1` unless you intentionally need a
   listener reachable from another host.
 - Review imported profiles before connecting them.
+- A local forward on a non-loopback listen address (`0.0.0.0`, `::` or a LAN IP)
+  lets anyone who can reach this computer use the profile's network access
+  without authentication. Keep forwards on `127.0.0.1` unless you need more.
 
 ## Project Layout
 
@@ -281,6 +320,7 @@ internal/connection/    Connection-domain events and values
 internal/application/   Use cases and repository/runtime ports
 internal/profilejson/   JSON persistence and transfer adapter
 internal/ui/            lobe-mygo desktop UI, tray and localization
+internal/localforward/   Host listeners relayed through a backend dial callback
 internal/runner/        Runtime adapter dispatcher
 internal/wireproxy/     Embedded WireGuard/wireproxy adapter
 internal/tailscale/     Embedded Tailscale/tsnet adapter

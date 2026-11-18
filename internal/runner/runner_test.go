@@ -248,6 +248,8 @@ func (*testBackend) ApplyLocalForwards(context.Context, string, []profile.LocalF
 	return nil
 }
 
+func (*testBackend) LocalForwardTargets(string) []string { return nil }
+
 func (*testBackend) RetryLocalForward(string, profile.LocalForwardKey) {}
 
 func (*testBackend) LocalForwardStates(string) []connection.LocalForwardState { return nil }

@@ -2,7 +2,9 @@ package tailscale
 
 import (
 	"context"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/localforward"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
@@ -60,4 +62,36 @@ func (r *Runner) LocalForwardStates(profileID string) []localforward.State {
 		return nil
 	}
 	return set.States()
+}
+
+// LocalForwardTargets lists the DNS names of the tailnet peers of a running profile.
+func (r *Runner) LocalForwardTargets(profileID string) []string {
+	r.mu.Lock()
+	proc := r.procs[strings.TrimSpace(profileID)]
+	r.mu.Unlock()
+	if proc == nil {
+		return nil
+	}
+	node := proc.getNode()
+	if node == nil {
+		return nil
+	}
+	client, err := node.LocalClient()
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	status, err := client.Status(ctx)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(status.Peer))
+	for _, peer := range status.Peer {
+		if name := trimDNS(peer.DNSName); name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
