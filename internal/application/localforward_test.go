@@ -89,3 +89,32 @@ func TestProfileSnapshotDoesNotAliasStoredRules(t *testing.T) {
 		t.Fatal("snapshot aliases stored rules")
 	}
 }
+
+func TestConnectAllStartsWithClonedRules(t *testing.T) {
+	item := profile.New("wg", sampleWG, 1080)
+	item.LocalForwards = []profile.LocalForward{{ListenAddr: "127.0.0.1:2222", TargetAddr: "pc:22"}}
+	service, _, _, runtime := newLoadedService(t, item)
+	runtime.startSetsRunning = true
+	err := service.ConnectAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.mu.Lock()
+		n := len(runtime.startProfiles)
+		runtime.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	runtime.mu.Lock()
+	started := runtime.startProfiles[0]
+	runtime.mu.Unlock()
+	started.LocalForwards[0].TargetAddr = "evil:1"
+	got, _ := service.Profile(item.ID)
+	if got.LocalForwards[0].TargetAddr != "pc:22" {
+		t.Fatal("started profile aliases stored rules")
+	}
+}

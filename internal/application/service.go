@@ -321,6 +321,10 @@ func (s *Service) Import(fileName string, data []byte) ([]profile.Profile, error
 		return nil, err
 	}
 
+	declared := make([]int, len(imported))
+	for i := range imported {
+		declared[i] = len(imported[i].LocalForwards)
+	}
 	s.mu.Lock()
 	imported = prepareImported(imported, s.profiles)
 	next := append(cloneProfiles(s.profiles), imported...)
@@ -333,6 +337,9 @@ func (s *Service) Import(fileName string, data []byte) ([]profile.Profile, error
 	for _, item := range imported {
 		s.statuses[item.ID] = StatusStopped
 		s.appendLogLocked(item.ID, time.Now(), "imported profile")
+		if dropped := declared[slices.IndexFunc(imported, func(o profile.Profile) bool { return o.ID == item.ID })] - len(item.LocalForwards); dropped > 0 {
+			s.appendLogLocked(item.ID, time.Now(), fmt.Sprintf("dropped %d invalid local forwards on import", dropped))
+		}
 	}
 	s.mu.Unlock()
 	for _, item := range imported {
@@ -462,7 +469,7 @@ func (s *Service) beginStartsLocked(profiles []profile.Profile, operation Operat
 			return starts, err
 		}
 		if started {
-			starts = append(starts, startRequest{ctx: ctx, profile: item, pending: pending})
+			starts = append(starts, startRequest{ctx: ctx, profile: cloneProfiles([]profile.Profile{item})[0], pending: pending})
 		}
 	}
 	return starts, nil

@@ -75,7 +75,7 @@ func (s *Service) RetryLocalForward(_ context.Context, profileID string, key pro
 // LocalForwardStates returns the live state of the rules of a running profile; it is empty otherwise.
 func (s *Service) LocalForwardStates(profileID string) []LocalForwardState {
 	s.mu.Lock()
-	running := s.statuses[profileID] == StatusRunning
+	running := s.statusLocked(profileID) == StatusRunning
 	s.mu.Unlock()
 	if !running || s.runtime == nil {
 		return nil
