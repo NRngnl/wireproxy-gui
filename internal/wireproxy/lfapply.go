@@ -16,8 +16,6 @@ import (
 
 var errNamedTargetNeedsDNS = errors.New("local forward target is a name but the WireGuard config has no DNS; set DNS in the WireGuard config or use an IP")
 
-// tunDialer dials through the WireGuard netstack only. Names resolve with the
-// config's DNS servers inside the tunnel; the host resolver is never used.
 func tunDialer(tun *upstream.VirtualTun) localforward.Dialer {
 	dial := func(network string) func(context.Context, string) (net.Conn, error) {
 		return func(ctx context.Context, addr string) (net.Conn, error) {

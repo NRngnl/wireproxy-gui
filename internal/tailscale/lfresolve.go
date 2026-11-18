@@ -24,9 +24,6 @@ func firstLabel(name string) string {
 	return label
 }
 
-// resolveTarget maps a tailnet name or IP to an address the netstack can dial.
-// It never consults host DNS. Names resolve only to peers or self; IPs may also
-// fall inside an online peer's primary (subnet) routes.
 func resolveTarget(status *ipnstate.Status, host string) (netip.Addr, error) {
 	ip, err := netip.ParseAddr(host)
 	if err == nil {
