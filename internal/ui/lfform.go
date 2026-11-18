@@ -10,6 +10,14 @@ import (
 
 func (w *workbench) localForwardForm(c *ui.Context, tk *theme.Tokens, sel *selectedProfile) {
 	sz, f := w.size(), &w.lf
+	if !f.Fetched {
+		f.Fetched = true
+		id := sel.Profile.ID
+		go func() {
+			names := w.core.LocalForwardTargets(id)
+			w.window.Update(func() { w.lf.Targets = names })
+		}()
+	}
 	box := ui.Column(c).Gap(12).Padding(12).Radius(tk.BorderRadius).Border(1, tk.BorderSecondary)
 	if box.Shortcut(0, ui.KeyEscape) {
 		w.lf = localForwardForm{}
@@ -36,7 +44,7 @@ func (w *workbench) localForwardForm(c *ui.Context, tk *theme.Tokens, sel *selec
 			feedback.Alert(c, tr("Anyone who can reach this computer can use this forward."), feedback.AlertProps{Type: feedback.Warning})
 		}
 		w.field(c, tk, tr("Target"), tr("A device name or IP on the network behind this profile, then the port."), func() {
-			field.AutoComplete(c.Key("lftarget"), &f.Target, field.AutoCompleteProps{Size: sz, Placeholder: tr("host:port, e.g. remote-pc:22"), Options: targetOptions(w.core.LocalForwardTargets(sel.Profile.ID))})
+			field.AutoComplete(c.Key("lftarget"), &f.Target, field.AutoCompleteProps{Size: sz, Placeholder: tr("host:port, e.g. remote-pc:22"), Options: targetOptions(f.Targets)})
 		})
 		if f.Err != "" {
 			ui.Text(c, tr(f.Err)).FontSize(tk.FontSizeSM).TextColor(tk.Error)

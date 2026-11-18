@@ -28,6 +28,8 @@ type localForwardForm struct {
 	Remove   *profile.LocalForwardKey
 	Removing bool
 	Busy     bool
+	Targets  []string
+	Fetched  bool
 }
 
 func (f *localForwardForm) listenIP() string {
