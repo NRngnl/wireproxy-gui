@@ -44,6 +44,12 @@ type storedTailscaleConfig struct {
 	PortForwards           []storedPortForward `json:"port_forwards,omitempty"`
 }
 
+type storedLocalForward struct {
+	Protocol   string `json:"protocol"`
+	ListenAddr string `json:"listen_addr"`
+	TargetAddr string `json:"target_addr"`
+}
+
 type storedProfile struct {
 	ID              string                 `json:"id"`
 	Kind            profile.BackendKind    `json:"kind,omitempty"`
@@ -52,6 +58,7 @@ type storedProfile struct {
 	TailscaleConfig *storedTailscaleConfig `json:"tailscale_config,omitempty"`
 	SocksHost       string                 `json:"socks_host"`
 	SocksPort       int                    `json:"socks_port"`
+	LocalForwards   []storedLocalForward   `json:"local_forwards,omitempty"`
 	AutoStart       bool                   `json:"auto_start"`
 	CreatedAt       time.Time              `json:"created_at"`
 	UpdatedAt       time.Time              `json:"updated_at"`
@@ -231,6 +238,7 @@ func fromDomainProfile(item profile.Profile) storedProfile {
 		WireGuardConfig: item.WireGuardConfig,
 		SocksHost:       item.SocksHost,
 		SocksPort:       item.SocksPort,
+		LocalForwards:   fromDomainLocalForwards(item.LocalForwards),
 		AutoStart:       item.AutoStart,
 		CreatedAt:       item.CreatedAt,
 		UpdatedAt:       item.UpdatedAt,
@@ -282,6 +290,7 @@ func (item storedProfile) toDomain() profile.Profile {
 		WireGuardConfig: item.WireGuardConfig,
 		SocksHost:       item.SocksHost,
 		SocksPort:       item.SocksPort,
+		LocalForwards:   toDomainLocalForwards(item.LocalForwards),
 		AutoStart:       item.AutoStart,
 		CreatedAt:       item.CreatedAt,
 		UpdatedAt:       item.UpdatedAt,
@@ -311,6 +320,36 @@ func toDomainPortForwards(rules []storedPortForward) []profile.PortForward {
 		domain = append(domain, profile.PortForward{
 			ListenPort: rule.ListenPort,
 			Protocol:   profile.PortForwardProtocol(rule.Protocol),
+			TargetAddr: rule.TargetAddr,
+		})
+	}
+	return domain
+}
+
+func fromDomainLocalForwards(rules []profile.LocalForward) []storedLocalForward {
+	if len(rules) == 0 {
+		return nil
+	}
+	stored := make([]storedLocalForward, 0, len(rules))
+	for _, rule := range rules {
+		stored = append(stored, storedLocalForward{
+			Protocol:   string(rule.Protocol),
+			ListenAddr: rule.ListenAddr,
+			TargetAddr: rule.TargetAddr,
+		})
+	}
+	return stored
+}
+
+func toDomainLocalForwards(rules []storedLocalForward) []profile.LocalForward {
+	if len(rules) == 0 {
+		return nil
+	}
+	domain := make([]profile.LocalForward, 0, len(rules))
+	for _, rule := range rules {
+		domain = append(domain, profile.LocalForward{
+			Protocol:   profile.PortForwardProtocol(rule.Protocol),
+			ListenAddr: rule.ListenAddr,
 			TargetAddr: rule.TargetAddr,
 		})
 	}

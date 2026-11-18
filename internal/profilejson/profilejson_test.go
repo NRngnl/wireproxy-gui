@@ -366,3 +366,38 @@ func TestBundleEncodingUsesVersionOne(t *testing.T) {
 		t.Fatalf("zero Tailscale adapter state should be omitted: %s", text)
 	}
 }
+
+func TestLocalForwardsRoundTripAndOmitWhenEmpty(t *testing.T) {
+	item := profile.NewTailscale("tailnet", 1080)
+	item.LocalForwards = []profile.LocalForward{
+		{Protocol: profile.PortForwardTCP, ListenAddr: "127.0.0.1:2222", TargetAddr: "remote-pc:22"},
+		{Protocol: profile.PortForwardUDP, ListenAddr: "[::1]:5353", TargetAddr: "10.0.0.2:53"},
+	}
+	data, err := EncodeBundle([]profile.Profile{item})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := NewRepository(filepath.Join(t.TempDir(), "profiles.json"))
+	err = repository.Save([]profile.Profile{item})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := repository.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got[0].LocalForwards, item.LocalForwards) {
+		t.Fatalf("LocalForwards = %#v, want %#v", got[0].LocalForwards, item.LocalForwards)
+	}
+	if !strings.Contains(string(data), `"local_forwards"`) {
+		t.Fatalf("missing local_forwards: %s", data)
+	}
+	item.LocalForwards = nil
+	data, err = EncodeBundle([]profile.Profile{item})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `local_forwards`) {
+		t.Fatalf("empty local_forwards should be omitted: %s", data)
+	}
+}
