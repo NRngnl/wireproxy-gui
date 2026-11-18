@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/NRngnl/wireproxy-gui/compare/v0.4.0...v0.4.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **socks5:** bound relay lifetimes and report udp failures ([#31](https://github.com/NRngnl/wireproxy-gui/issues/31)) ([34597dd](https://github.com/NRngnl/wireproxy-gui/commit/34597ddba60b432f0390c796af6d6361b5e7389b))
+
 ## [0.4.0](https://github.com/NRngnl/wireproxy-gui/compare/v0.3.3...v0.4.0) (2026-11-10)
 
 
