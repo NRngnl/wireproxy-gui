@@ -318,6 +318,11 @@ func TestUDPSessionsAreCapped(t *testing.T) {
 	}
 	listen := probe.LocalAddr().String()
 	_ = probe.Close()
+	sink, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
 	var d net.Dialer
 	var open atomic.Int32
 	set := New(t.Context(), Dialer{UDP: func(ctx context.Context, addr string) (net.Conn, error) {
@@ -329,7 +334,7 @@ func TestUDPSessionsAreCapped(t *testing.T) {
 		return &countedConn{Conn: c, open: &open}, nil
 	}}, socksconn.Timeouts{}, nil)
 	defer set.Close()
-	set.Apply([]profile.LocalForward{{Protocol: profile.PortForwardUDP, ListenAddr: listen, TargetAddr: "127.0.0.1:9"}})
+	set.Apply([]profile.LocalForward{{Protocol: profile.PortForwardUDP, ListenAddr: listen, TargetAddr: sink.LocalAddr().String()}})
 	for range maxUDPSessions + 100 {
 		c, err := d.DialContext(t.Context(), "udp", listen)
 		if err != nil {
