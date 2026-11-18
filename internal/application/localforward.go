@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
@@ -131,11 +132,12 @@ func (s *Service) syncLocalForwards(ctx context.Context, profileID string) error
 	if s.runtime == nil {
 		return nil
 	}
-	s.forwards.Lock()
-	defer s.forwards.Unlock()
+	lock := s.forwardLock(profileID)
+	lock.Lock()
+	defer lock.Unlock()
 	s.mu.Lock()
 	item, ok := s.profileLocked(profileID)
-	running := ok && s.statuses[profileID] == StatusRunning
+	running := ok && s.statusLocked(profileID) == StatusRunning
 	s.mu.Unlock()
 	if !running {
 		return nil
@@ -151,4 +153,18 @@ func (s *Service) profileLocked(profileID string) (profile.Profile, bool) {
 	item := s.profiles[index]
 	item.LocalForwards = slices.Clone(item.LocalForwards)
 	return item, true
+}
+
+func (s *Service) forwardLock(profileID string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.forwards == nil {
+		s.forwards = map[string]*sync.Mutex{}
+	}
+	lock := s.forwards[profileID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.forwards[profileID] = lock
+	}
+	return lock
 }

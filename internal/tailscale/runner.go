@@ -1286,11 +1286,10 @@ func (p *process) close() {
 	forwards := p.localForwards
 	p.mu.Unlock()
 
+	cancel()
 	if forwards != nil {
 		forwards.Close()
 	}
-
-	cancel()
 	if listener != nil {
 		_ = listener.Close()
 	}

@@ -51,14 +51,14 @@ func TestResolveWithPeerWaitBudget(t *testing.T) {
 		}
 		return populated, nil
 	}}
-	ip, err := resolveWithPeerWait(t.Context(), &fakeTSNode{client: late}, "pc")
+	ip, err := resolveWithPeerWait(t.Context(), &statusCache{client: late}, "pc")
 	if err != nil || ip.String() != "100.64.0.2" {
 		t.Fatalf("late peer: %v %v", ip, err)
 	}
 
 	known := &fakeLocalClient{status: populated}
-	_, err = resolveWithPeerWait(t.Context(), &fakeTSNode{client: known}, "nope")
-	if !errors.Is(err, errTargetNotFound) || known.statusCalls != 1 {
+	_, err = resolveWithPeerWait(t.Context(), &statusCache{client: known}, "nope")
+	if !errors.Is(err, errTargetNotFound) || known.statusCalls != 2 {
 		t.Fatalf("miss with peers should fail at once: %v after %d calls", err, known.statusCalls)
 	}
 }

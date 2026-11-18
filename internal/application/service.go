@@ -115,7 +115,7 @@ type Service struct {
 	logs     map[string][]LogEntry
 	starts   map[string]*pendingStart
 	changes  chan Change
-	forwards sync.Mutex
+	forwards map[string]*sync.Mutex
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -151,14 +151,23 @@ func (s *Service) Load() error {
 	}
 
 	s.mu.Lock()
+	previous := s.statuses
 	s.profiles = cloneProfiles(profiles)
 	s.statuses = make(map[string]Status, len(profiles))
 	s.logs = make(map[string][]LogEntry, len(profiles))
 	s.starts = map[string]*pendingStart{}
+	var running []string
 	for _, item := range profiles {
 		s.statuses[item.ID] = StatusStopped
+		if previous[item.ID] == StatusRunning && s.runtime != nil && s.runtime.Running(item.ID) {
+			s.statuses[item.ID] = StatusRunning
+			running = append(running, item.ID)
+		}
 	}
 	s.mu.Unlock()
+	for _, id := range running {
+		_ = s.syncLocalForwards(s.ctx, id)
+	}
 	s.notify(Change{})
 	return nil
 }
@@ -304,13 +313,13 @@ func (s *Service) Delete(profileID string) error {
 		pending.cancel()
 		delete(s.starts, profileID)
 	}
-	if s.runtime != nil {
-		s.runtime.Stop(profileID)
-	}
 	s.profiles = next
 	delete(s.statuses, profileID)
 	delete(s.logs, profileID)
 	s.mu.Unlock()
+	if s.runtime != nil {
+		s.runtime.Stop(profileID)
+	}
 	s.notify(Change{ProfileID: profileID})
 	return nil
 }
@@ -553,10 +562,12 @@ func (s *Service) disconnect(profileID, message string) bool {
 		pending.cancel()
 		canceling = true
 	}
+	s.mu.Unlock()
 	stopped := false
 	if s.runtime != nil {
 		stopped = s.runtime.Stop(profileID)
 	}
+	s.mu.Lock()
 	if stopped || canceling {
 		s.statuses[profileID] = StatusStopping
 	} else {
@@ -580,11 +591,11 @@ func (s *Service) DisconnectAll() {
 			s.statuses[item.ID] = StatusStopping
 		}
 	}
+	profiles := cloneProfiles(s.profiles)
+	s.mu.Unlock()
 	if s.runtime != nil {
 		s.runtime.StopAll()
 	}
-	profiles := cloneProfiles(s.profiles)
-	s.mu.Unlock()
 	for _, item := range profiles {
 		s.notify(Change{ProfileID: item.ID})
 	}
