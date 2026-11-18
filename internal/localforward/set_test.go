@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -295,5 +296,51 @@ func TestSetCloseDoesNotHangOnUDPSessions(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close hung with an active UDP session")
+	}
+}
+
+type countedConn struct {
+	net.Conn
+	open *atomic.Int32
+	once sync.Once
+}
+
+func (c *countedConn) Close() error {
+	c.once.Do(func() { c.open.Add(-1) })
+	return c.Conn.Close()
+}
+
+func TestUDPSessionsAreCapped(t *testing.T) {
+	var lc net.ListenConfig
+	probe, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listen := probe.LocalAddr().String()
+	_ = probe.Close()
+	var d net.Dialer
+	var open atomic.Int32
+	set := New(t.Context(), Dialer{UDP: func(ctx context.Context, addr string) (net.Conn, error) {
+		c, err := d.DialContext(ctx, "udp", addr)
+		if err != nil {
+			return nil, err
+		}
+		open.Add(1)
+		return &countedConn{Conn: c, open: &open}, nil
+	}}, socksconn.Timeouts{}, nil)
+	defer set.Close()
+	set.Apply([]profile.LocalForward{{Protocol: profile.PortForwardUDP, ListenAddr: listen, TargetAddr: "127.0.0.1:9"}})
+	for range maxUDPSessions + 100 {
+		c, err := d.DialContext(t.Context(), "udp", listen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = c.Write([]byte("x"))
+		defer c.Close()
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := open.Load(); n > maxUDPSessions {
+		t.Fatalf("open target sockets = %d, cap %d", n, maxUDPSessions)
 	}
 }

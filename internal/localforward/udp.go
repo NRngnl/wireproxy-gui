@@ -8,22 +8,24 @@ import (
 	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 )
 
+const maxUDPSessions = 512
+
 type udpSession struct {
 	conn net.Conn
+	used uint64
 }
 
-func (s *Set) startUDP(ctx context.Context, e *entry) error {
+func (s *Set) bindUDP(ctx context.Context, e *entry) (func(), error) {
 	var lc net.ListenConfig
 	packetConn, err := lc.ListenPacket(ctx, "udp", e.rule.ListenAddr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	e.closer = func() { _ = packetConn.Close() }
-	go func() {
+	return func() {
 		defer close(e.done)
 		s.serveUDP(ctx, e, packetConn)
-	}()
-	return nil
+	}, nil
 }
 
 func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn) {
@@ -31,6 +33,7 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 		mu       sync.Mutex
 		sessions = map[string]*udpSession{}
 		wg       sync.WaitGroup
+		tick     uint64
 	)
 	closing := false
 	defer func() {
@@ -69,17 +72,18 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 		}
 		s.dialSucceeded(e)
 		conn := socksconn.WrapUDP(raw, s.timeouts.UDPIdle)
+		_, werr := conn.Write(first)
+		if werr != nil {
+			_ = conn.Close()
+			retire(key, sess)
+			return
+		}
 		mu.Lock()
 		sess.conn = conn
 		stale := sessions[key] != sess || ctx.Err() != nil || closing
 		mu.Unlock()
 		if stale {
 			_ = conn.Close()
-			return
-		}
-		_, werr := conn.Write(first)
-		if werr != nil {
-			retire(key, sess)
 			return
 		}
 		buf := make([]byte, socksconn.UDPBufferSize)
@@ -103,14 +107,19 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 		key := source.String()
 		mu.Lock()
 		sess, ok := sessions[key]
+		tick++
 		if !ok {
-			sess = &udpSession{}
+			if len(sessions) >= maxUDPSessions {
+				evictOldest(sessions)
+			}
+			sess = &udpSession{used: tick}
 			sessions[key] = sess
 			payload := append([]byte(nil), buf[:n]...)
 			wg.Go(func() { open(key, source, sess, payload) })
 			mu.Unlock()
 			continue
 		}
+		sess.used = tick
 		conn := sess.conn
 		mu.Unlock()
 		if conn == nil {
@@ -120,5 +129,19 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 		if werr != nil {
 			retire(key, sess)
 		}
+	}
+}
+
+func evictOldest(sessions map[string]*udpSession) {
+	var oldestKey string
+	var oldest *udpSession
+	for key, sess := range sessions {
+		if oldest == nil || sess.used < oldest.used {
+			oldestKey, oldest = key, sess
+		}
+	}
+	delete(sessions, oldestKey)
+	if oldest.conn != nil {
+		_ = oldest.conn.Close()
 	}
 }

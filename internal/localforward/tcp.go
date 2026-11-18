@@ -8,14 +8,14 @@ import (
 	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 )
 
-func (s *Set) startTCP(ctx context.Context, e *entry) error {
+func (s *Set) bindTCP(ctx context.Context, e *entry) (func(), error) {
 	var lc net.ListenConfig
 	listener, err := lc.Listen(ctx, "tcp", e.rule.ListenAddr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	e.closer = func() { _ = listener.Close() }
-	go func() {
+	return func() {
 		defer close(e.done)
 		var conns sync.WaitGroup
 		defer conns.Wait()
@@ -27,8 +27,7 @@ func (s *Set) startTCP(ctx context.Context, e *entry) error {
 			}
 			conns.Go(func() { s.relayTCP(ctx, e, conn) })
 		}
-	}()
-	return nil
+	}, nil
 }
 
 func (s *Set) relayTCP(ctx context.Context, e *entry, conn net.Conn) {

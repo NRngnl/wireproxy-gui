@@ -108,7 +108,7 @@ func (s *Set) Apply(next []profile.LocalForward) {
 		_, exists := s.entries[key]
 		s.mu.Unlock()
 		if !exists {
-			s.install(key, s.start(wanted[key]))
+			s.start(wanted[key])
 		}
 	}
 	s.changed()
@@ -129,7 +129,7 @@ func (s *Set) Retry(key profile.LocalForwardKey) {
 		return
 	}
 	e.stop()
-	s.install(key, s.start(e.rule))
+	s.start(e.rule)
 	s.changed()
 }
 
@@ -173,30 +173,30 @@ func (s *Set) isClosed() bool {
 	return s.closed
 }
 
-func (s *Set) install(key profile.LocalForwardKey, e *entry) {
-	s.mu.Lock()
-	s.entries[key] = e
-	s.mu.Unlock()
-}
-
-func (s *Set) start(rule profile.LocalForward) *entry {
+func (s *Set) start(rule profile.LocalForward) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	e := &entry{rule: rule, cancel: cancel, done: make(chan struct{})}
+	var run func()
 	var err error
 	if rule.Protocol == profile.PortForwardUDP {
-		err = s.startUDP(ctx, e)
+		run, err = s.bindUDP(ctx, e)
 	} else {
-		err = s.startTCP(ctx, e)
+		run, err = s.bindTCP(ctx, e)
 	}
 	if err != nil {
 		cancel()
 		close(e.done)
 		e.status = StatusError
 		e.err = bindMessage(err)
-		return e
+	} else {
+		e.status = StatusActive
 	}
-	e.status = StatusActive
-	return e
+	s.mu.Lock()
+	s.entries[rule.Key()] = e
+	s.mu.Unlock()
+	if run != nil {
+		go run()
+	}
 }
 
 func (s *Set) fail(ctx context.Context, e *entry, err error) {
@@ -226,9 +226,12 @@ func (s *Set) dialSucceeded(e *entry) {
 
 func (s *Set) dialFailed(e *entry, err error) {
 	s.mu.Lock()
+	changed := e.dialErr != err.Error()
 	e.dialErr = err.Error()
 	s.mu.Unlock()
-	s.changed()
+	if changed {
+		s.changed()
+	}
 }
 
 func (e *entry) stop() {
