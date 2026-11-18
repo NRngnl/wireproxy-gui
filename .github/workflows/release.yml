@@ -116,7 +116,7 @@ jobs:
           RELEASE_VERSION="$RELEASE_TAG" GOOS="$TARGET_OS" GOARCH="$TARGET_ARCH" scripts/build-release.sh
 
       - name: Keep artifact for smoke test
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
           path: dist/release/artifacts/
@@ -187,7 +187,7 @@ jobs:
     needs: build
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: dist-windows-amd64
           path: dist
@@ -251,7 +251,7 @@ jobs:
           fi
 
       - name: Keep artifact for smoke test
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: dist-macos-${{ matrix.arch }}
           path: dist/release/artifacts/
