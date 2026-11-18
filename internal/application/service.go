@@ -146,6 +146,7 @@ func (s *Service) Load() error {
 	}
 	for i := range profiles {
 		profiles[i].Normalize()
+		profiles[i].SanitizeLocalForwards()
 	}
 
 	s.mu.Lock()
@@ -858,6 +859,7 @@ func prepareImported(imported, existing []profile.Profile) []profile.Profile {
 			}
 		}
 		usedPorts[imported[index].SocksPort] = true
+		imported[index].SanitizeLocalForwards()
 	}
 	return imported
 }

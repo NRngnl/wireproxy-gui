@@ -33,25 +33,34 @@ func (f LocalForward) Key() LocalForwardKey {
 	return LocalForwardKey{Protocol: f.Protocol, ListenAddr: f.ListenAddr}
 }
 
-// Normalize trims the rule, defaults the protocol to tcp and turns a bare listen port into 127.0.0.1:<port>.
+// Normalize trims the rule, defaults the protocol to tcp, turns a bare listen port into 127.0.0.1:<port>
+// and writes the listen address and target port in canonical form.
 func (f *LocalForward) Normalize() {
 	f.Protocol = PortForwardProtocol(strings.ToLower(strings.TrimSpace(string(f.Protocol))))
 	if f.Protocol == "" {
 		f.Protocol = PortForwardTCP
 	}
-	f.TargetAddr = strings.TrimSpace(f.TargetAddr)
+	f.TargetAddr = canonicalHostPort(strings.TrimSpace(f.TargetAddr), false)
 	listen := strings.TrimSpace(f.ListenAddr)
 	if validPort(listen) {
 		listen = net.JoinHostPort(DefaultSocksHost, listen)
 	}
-	host, port, err := net.SplitHostPort(listen)
-	if err == nil {
-		ip, err := netip.ParseAddr(host)
-		if err == nil && ip.Zone() == "" {
-			listen = net.JoinHostPort(ip.String(), port)
-		}
+	f.ListenAddr = canonicalHostPort(listen, true)
+}
+
+func canonicalHostPort(addr string, ipHost bool) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || !validPort(port) {
+		return addr
 	}
-	f.ListenAddr = listen
+	number, _ := strconv.Atoi(port)
+	ip, parseErr := netip.ParseAddr(host)
+	if parseErr == nil && ip.Zone() == "" {
+		host = ip.Unmap().String()
+	} else if ipHost {
+		return addr
+	}
+	return net.JoinHostPort(host, strconv.Itoa(number))
 }
 
 // NormalizeLocalForwardKey normalizes a lookup key the same way as a rule.
@@ -73,15 +82,32 @@ func (f LocalForward) Validate() error {
 		errs = append(errs, ErrLocalForwardListenInvalid)
 	}
 	host, port, err := net.SplitHostPort(f.TargetAddr)
-	if err != nil || host == "" || !validPort(port) {
+	if err != nil || !validTargetHost(host) || !validPort(port) {
 		errs = append(errs, ErrLocalForwardTargetInvalid)
 	}
 	return errors.Join(errs...)
 }
 
 func validPort(s string) bool {
-	n, err := strconv.Atoi(s)
-	return err == nil && n >= 1 && n <= 65535
+	n, err := strconv.ParseUint(s, 10, 16)
+	return err == nil && n >= 1
+}
+
+func validTargetHost(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	ip, err := netip.ParseAddr(host)
+	if err == nil {
+		return ip.Zone() == ""
+	}
+	for _, r := range host {
+		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+		if !letter && (r < '0' || r > '9') && r != '-' && r != '.' && r != '_' {
+			return false
+		}
+	}
+	return !strings.HasPrefix(host, ".") && !strings.HasPrefix(host, "-")
 }
 
 func validListenAddr(addr string) bool {
@@ -90,7 +116,26 @@ func validListenAddr(addr string) bool {
 		return false
 	}
 	ip, err := netip.ParseAddr(host)
-	return err == nil && ip.Zone() == ""
+	return err == nil && ip.Zone() == "" && !ip.Is4In6() && !ip.IsMulticast() && ip != netip.AddrFrom4([4]byte{255, 255, 255, 255})
+}
+
+// SanitizeLocalForwards drops rules that fail validation, duplicate an earlier key or clash with the SOCKS5 bind,
+// and returns the number dropped. Call after Normalize on data that did not come through Validate.
+func (p *Profile) SanitizeLocalForwards() int {
+	kept := make([]LocalForward, 0, len(p.LocalForwards))
+	seen := map[LocalForwardKey]bool{}
+	for _, rule := range p.LocalForwards {
+		if rule.Validate() != nil || seen[rule.Key()] || (rule.Protocol == PortForwardTCP && listenClashesSocks(rule.ListenAddr, *p)) {
+			continue
+		}
+		seen[rule.Key()] = true
+		kept = append(kept, rule)
+	}
+	dropped := len(p.LocalForwards) - len(kept)
+	if dropped > 0 {
+		p.LocalForwards = kept
+	}
+	return dropped
 }
 
 func validateLocalForwards(p Profile) error {
@@ -116,15 +161,28 @@ func validateLocalForwards(p Profile) error {
 func listenClashesSocks(listen string, p Profile) bool {
 	host, port, _ := net.SplitHostPort(listen)
 	socksHost, socksPort, err := net.SplitHostPort(p.BindAddress())
-	if err != nil || port != socksPort {
+	if err != nil {
 		return false
 	}
 	a, errA := netip.ParseAddr(host)
 	b, errB := netip.ParseAddr(socksHost)
 	if errA != nil || errB != nil {
-		return host == socksHost
+		return false
 	}
-	return a == b || a.IsUnspecified() || b.IsUnspecified()
+	pa, _ := strconv.Atoi(port)
+	pb, err := strconv.Atoi(socksPort)
+	if err != nil || pa != pb {
+		return false
+	}
+	a, b = a.Unmap(), b.Unmap()
+	return a == b || coversAddr(a, b) || coversAddr(b, a)
+}
+
+func coversAddr(wild, other netip.Addr) bool {
+	if !wild.IsUnspecified() {
+		return false
+	}
+	return wild.Is6() || other.Is4()
 }
 
 func localForwardsEqual(a, b []LocalForward) bool {

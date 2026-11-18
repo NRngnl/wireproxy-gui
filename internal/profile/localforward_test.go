@@ -33,3 +33,22 @@ func TestLocalForwardNormalizeValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalForwardCanonicalAndSanitize(t *testing.T) {
+	p := New("n", "x", 1080)
+	p.LocalForwards = []LocalForward{
+		{ListenAddr: "[::ffff:127.0.0.1]:002222", TargetAddr: "PC:0022"},
+		{ListenAddr: "127.0.0.1:2222", TargetAddr: "pc:22"},
+		{Protocol: PortForwardUDP, ListenAddr: "224.0.0.1:53", TargetAddr: "a:1"},
+		{Protocol: PortForwardUDP, ListenAddr: "255.255.255.255:53", TargetAddr: "a:1"},
+		{ListenAddr: "[::]:1080", TargetAddr: "a:1"},
+		{ListenAddr: "127.0.0.1:3333", TargetAddr: "bad host:1"},
+	}
+	p.Normalize()
+	if got := p.LocalForwards[0]; got.ListenAddr != "127.0.0.1:2222" || got.TargetAddr != "PC:22" {
+		t.Fatalf("canonical = %#v", got)
+	}
+	if dropped := p.SanitizeLocalForwards(); dropped != 5 || len(p.LocalForwards) != 1 {
+		t.Fatalf("dropped %d, kept %#v", dropped, p.LocalForwards)
+	}
+}
