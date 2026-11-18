@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
+	"github.com/NRngnl/wireproxy-gui/internal/localforward"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
 	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 	socks5 "github.com/things-go/go-socks5"
@@ -42,10 +43,11 @@ type Event = connection.Event
 type EventType = connection.EventType
 
 const (
-	EventLog     = connection.EventLog
-	EventStarted = connection.EventStarted
-	EventStopped = connection.EventStopped
-	EventError   = connection.EventError
+	EventLog                 = connection.EventLog
+	EventStarted             = connection.EventStarted
+	EventStopped             = connection.EventStopped
+	EventError               = connection.EventError
+	EventLocalForwardChanged = connection.EventLocalForwardChanged
 )
 
 const (
@@ -160,12 +162,13 @@ type process struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	mu           sync.Mutex
-	doneOnce     sync.Once
-	closed       bool
-	listener     net.Listener
-	node         tsNode
-	forwardConns []io.Closer // TCP listeners and UDP PacketConns for active port forwards
+	mu            sync.Mutex
+	doneOnce      sync.Once
+	closed        bool
+	listener      net.Listener
+	node          tsNode
+	localForwards *localforward.Set
+	forwardConns  []io.Closer // TCP listeners and UDP PacketConns for active port forwards
 }
 
 func NewRunner() *Runner {
@@ -357,6 +360,10 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	if err != nil {
 		return err
 	}
+
+	proc.startLocalForwards(procCtx, runningNode, r.timeouts, p.LocalForwards, func() {
+		r.emit(EventLocalForwardChanged, p, "")
+	})
 
 	started = true
 	r.emit(EventStarted, p, "connected on "+p.BindAddress())
@@ -1274,7 +1281,12 @@ func (p *process) close() {
 	listener := p.listener
 	node := p.node
 	forwardConns := p.forwardConns
+	forwards := p.localForwards
 	p.mu.Unlock()
+
+	if forwards != nil {
+		forwards.Close()
+	}
 
 	cancel()
 	if listener != nil {

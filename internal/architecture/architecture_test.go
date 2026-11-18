@@ -20,9 +20,9 @@ func TestInternalDependenciesPointInward(t *testing.T) {
 	rules := map[string][]string{
 		"application":  {"connection", "profile"},
 		"buildinfo":    {},
-		"connection":   {},
+		"connection":   {"profile"},
 		"daemon":       {"application", "buildinfo", "connection", "profile"},
-		"localforward": {"profile", "socksconn"},
+		"localforward": {"connection", "profile", "socksconn"},
 		"lock":         {},
 		"profile":      {},
 		"profilejson":  {"application", "profile"},

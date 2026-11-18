@@ -8,6 +8,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
 	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 )
@@ -15,20 +16,16 @@ import (
 // ErrPortInUse is the rule error when the listen address is already bound.
 var ErrPortInUse = errors.New("port in use")
 
-// Status is the live state of one rule.
-type Status string
-
-const (
-	StatusActive Status = "active"
-	StatusError  Status = "error"
-)
+// Status is the live status of one rule.
+type Status = connection.LocalForwardStatus
 
 // State reports one rule's status; Err is set when Status is StatusError.
-type State struct {
-	Key    profile.LocalForwardKey
-	Status Status
-	Err    string
-}
+type State = connection.LocalForwardState
+
+const (
+	StatusActive = connection.LocalForwardActive
+	StatusError  = connection.LocalForwardError
+)
 
 // Dialer opens connections to a target through the backend, never through the host network.
 type Dialer struct {
