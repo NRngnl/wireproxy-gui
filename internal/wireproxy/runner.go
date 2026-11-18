@@ -12,6 +12,7 @@ import (
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
+	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 	socks5 "github.com/things-go/go-socks5"
 	"github.com/things-go/go-socks5/bufferpool"
 	upstream "github.com/windtf/wireproxy"
@@ -235,7 +236,13 @@ func (r *Runner) runSocks5(_ context.Context, config *upstream.Socks5Config, tun
 	}
 
 	server := socks5.NewServer(
-		socks5.WithDial(tun.Tnet.DialContext),
+		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := tun.Tnet.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return socksconn.Wrap(conn), nil
+		}),
 		socks5.WithResolver(tun),
 		socks5.WithAuthMethods(authMethods),
 		socks5.WithBufferPool(bufferpool.NewPool(256*1024)),

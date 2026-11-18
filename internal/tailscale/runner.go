@@ -17,6 +17,7 @@ import (
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
+	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 	socks5 "github.com/things-go/go-socks5"
 	"github.com/things-go/go-socks5/bufferpool"
 	"tailscale.com/ipn"
@@ -763,7 +764,7 @@ func (r *Runner) runSocks5(_ context.Context, node tsNode, listener net.Listener
 			if err != nil {
 				return nil, err
 			}
-			return socksReplyConn{Conn: conn}, nil
+			return socksconn.Wrap(socksReplyConn{Conn: conn}), nil
 		}),
 		// WithDial backs SOCKS5 UDP ASSOCIATE (go-socks5's handleAssociate reads
 		// only the WithDial callback, never the WithDialAndRequest one used above
@@ -994,6 +995,13 @@ func (r *Runner) emitForwardError(rule profile.PortForward, err error, profileID
 
 type socksReplyConn struct {
 	net.Conn
+}
+
+func (c socksReplyConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
 }
 
 func (c socksReplyConn) LocalAddr() net.Addr {
