@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/NRngnl/wireproxy-gui/compare/v0.4.1...v0.4.2) (2026-11-18)
+
+
+### Bug Fixes
+
+* **tailscale:** wait for peers before applying a saved exit node ([#33](https://github.com/NRngnl/wireproxy-gui/issues/33)) ([f363478](https://github.com/NRngnl/wireproxy-gui/commit/f36347880ffad249d9ba7ad10ecd461dfae4e7e0))
+
 ## [0.4.1](https://github.com/NRngnl/wireproxy-gui/compare/v0.4.0...v0.4.1) (2026-11-18)
 
 
