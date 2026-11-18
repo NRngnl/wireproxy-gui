@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,4 +124,57 @@ func TestApplyPortConflictLiveSessionAndRemoval(t *testing.T) {
 		t.Fatalf("port not freed after removal: %v", err)
 	}
 	_ = l.Close()
+}
+
+func TestUDPRelayAndIdleExpiry(t *testing.T) {
+	var lc net.ListenConfig
+	echo, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, addr, err := echo.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = echo.WriteTo(buf[:n], addr)
+		}
+	}()
+	var d net.Dialer
+	var dials atomic.Int32
+	set := New(t.Context(), Dialer{UDP: func(ctx context.Context, addr string) (net.Conn, error) {
+		dials.Add(1)
+		return d.DialContext(ctx, "udp", addr)
+	}}, socksconn.Timeouts{UDPIdle: 200 * time.Millisecond}, nil)
+	defer set.Close()
+	probe, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listen := probe.LocalAddr().String()
+	_ = probe.Close()
+	set.Apply([]profile.LocalForward{{Protocol: profile.PortForwardUDP, ListenAddr: listen, TargetAddr: echo.LocalAddr().String()}})
+	client, err := d.DialContext(t.Context(), "udp", listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	roundTrip := func() {
+		_, _ = client.Write([]byte("hi"))
+		_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+		buf := make([]byte, 16)
+		n, err := client.Read(buf)
+		if err != nil || string(buf[:n]) != "hi" {
+			t.Fatalf("echo = %q, %v", buf[:n], err)
+		}
+	}
+	roundTrip()
+	time.Sleep(600 * time.Millisecond)
+	roundTrip()
+	if dials.Load() != 2 {
+		t.Fatalf("dials = %d, want 2 (idle session should expire)", dials.Load())
+	}
 }
