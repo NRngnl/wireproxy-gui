@@ -609,6 +609,9 @@ func (r *Runner) emit(eventType EventType, p profile.Profile, message string) {
 		Message:     message,
 		At:          time.Now(),
 	}
+	if eventType == EventLocalForwardChanged && len(r.events) > cap(r.events)/2 {
+		return
+	}
 	select {
 	case r.events <- event:
 	default:
