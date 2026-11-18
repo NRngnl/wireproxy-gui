@@ -669,6 +669,7 @@ func configureExitNode(ctx context.Context, node tsNode, cfg profile.TailscaleCo
 	prefs.ClearExitNode()
 	prefs.AutoExitNode = ""
 	prefs.ExitNodeAllowLANAccess = cfg.ExitNodeAllowLANAccess
+	prefs.RouteAll = true
 
 	exitNode := strings.TrimSpace(cfg.ExitNode)
 	if cfg.AutoExitNode {
@@ -697,6 +698,7 @@ func configureExitNode(ctx context.Context, node tsNode, cfg profile.TailscaleCo
 		ExitNodeIPSet:             true,
 		AutoExitNodeSet:           true,
 		ExitNodeAllowLANAccessSet: true,
+		RouteAllSet:               true,
 	})
 	return err
 }

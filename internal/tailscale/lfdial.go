@@ -3,7 +3,6 @@ package tailscale
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
 	"strconv"
@@ -76,19 +75,24 @@ func resolveWithPeerWait(ctx context.Context, node tsNode, host string) (netip.A
 	if err != nil {
 		return netip.Addr{}, err
 	}
-	deadline := time.Now().Add(peerWaitTimeout)
+	waitCtx, cancel := context.WithTimeout(ctx, peerWaitTimeout)
+	defer cancel()
 	for {
-		status, err := client.Status(ctx)
+		status, err := client.Status(waitCtx)
 		if err != nil {
-			return netip.Addr{}, err
+			status, err = client.Status(ctx)
+			if err != nil {
+				return netip.Addr{}, err
+			}
+			return resolveTarget(status, host)
 		}
 		ip, resolveErr := resolveTarget(status, host)
-		if resolveErr == nil || len(status.Peer) > 0 || !time.Now().Before(deadline) {
+		if resolveErr == nil || len(status.Peer) > 0 {
 			return ip, resolveErr
 		}
-		err = waitPoll(ctx)
+		err = waitPoll(waitCtx)
 		if err != nil {
-			return netip.Addr{}, fmt.Errorf("waiting for tailnet peers: %w", err)
+			return ip, resolveErr
 		}
 	}
 }

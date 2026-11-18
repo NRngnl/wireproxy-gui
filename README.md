@@ -226,7 +226,8 @@ For example, TCP `127.0.0.1:2222` to `remote-pc:22` lets
   `::1`, `0.0.0.0`, `::` or a specific local IP are allowed.
 - Tailscale targets: a MagicDNS full name, an unambiguous short name, a peer's
   Tailscale IP, or an IP inside a subnet route advertised by an online peer.
-  Names are never resolved by the host. A target that matches no peer or route
+  The embedded node accepts subnet routes from your tailnet (RouteAll), so a routed IP is only
+  reachable when the route is advertised, approved and its router is online. Names are never resolved by the host. A target that matches no peer or route
   fails closed. If the tailnet has no peers yet, the dial waits up to 5 seconds.
 - WireGuard targets: an IP address, or a name when the WireGuard config sets
   `DNS`. A name with no `DNS` fails with a clear error instead of using the host
@@ -243,8 +244,9 @@ For example, TCP `127.0.0.1:2222` to `remote-pc:22` lets
   drain a half-close and 60 seconds UDP session idle.
 - Rules are stored as `local_forwards` in the profile JSON. Older versions
   ignore the key, so a downgrade drops the rules.
-- The daemon applies rules from the store when it connects a profile. Edits made
-  in another frontend reach it after a reload or restart.
+- The daemon applies a profile's rules when it connects the profile. A profile that is
+  already connected keeps its rules until it is disconnected and connected again, or
+  the daemon restarts. A reload (`SIGHUP`) only starts profiles that are not running.
 
 ## Import And Export
 
