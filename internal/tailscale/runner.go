@@ -1002,50 +1002,15 @@ func (r *Runner) relayTCPForward(ctx context.Context, _ tsNode, listener net.Lis
 }
 
 func relayTCPConn(ctx context.Context, conn net.Conn, targetAddr string, timeouts socksconn.Timeouts) {
-	defer conn.Close()
 	dialCtx, cancel := socksconn.DialContext(ctx, ctx, timeouts.Dial)
 	var dialer net.Dialer
 	target, err := dialer.DialContext(dialCtx, "tcp", targetAddr)
 	cancel()
 	if err != nil {
+		_ = conn.Close()
 		return
 	}
-	defer target.Close()
-
-	wrappedConn := socksconn.WrapTCP(conn, timeouts.TCPIdle, timeouts.Drain)
-	wrappedTarget := socksconn.WrapTCP(target, timeouts.TCPIdle, timeouts.Drain)
-
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = wrappedConn.Close()
-			_ = wrappedTarget.Close()
-		case <-done:
-		}
-	}()
-
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		_, _ = io.Copy(wrappedTarget, wrappedConn)
-		closeWriteOrClose(wrappedTarget, target)
-	})
-	wg.Go(func() {
-		_, _ = io.Copy(wrappedConn, wrappedTarget)
-		closeWriteOrClose(wrappedConn, conn)
-	})
-	wg.Wait()
-	close(done)
-}
-
-func closeWriteOrClose(wrapped, raw net.Conn) {
-	if _, ok := raw.(interface{ CloseWrite() error }); ok {
-		if cw, ok := wrapped.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-			return
-		}
-	}
-	_ = wrapped.Close()
+	socksconn.RelayTCP(ctx, conn, target, timeouts)
 }
 
 func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.PacketConn, rule profile.PortForward, profileID, profileName string) {
