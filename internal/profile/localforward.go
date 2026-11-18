@@ -60,6 +60,9 @@ func canonicalHostPort(addr string, ipHost bool) string {
 	} else if ipHost {
 		return addr
 	}
+	if !ipHost {
+		host = strings.TrimSuffix(host, ".")
+	}
 	return net.JoinHostPort(host, strconv.Itoa(number))
 }
 
