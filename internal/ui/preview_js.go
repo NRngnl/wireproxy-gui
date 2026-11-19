@@ -29,11 +29,11 @@ func Preview(core Application, opts PreviewOptions) error {
 	switch opts.Scene {
 	case "form":
 		w.lf = localForwardForm{Open: true, Listen: listenLoopback4, Port: "2222", Target: "remote-pc"}
-		w.lf.Err = "Target must look like host:port, for example remote-pc:22"
+		w.lf.Err = "Target port must be a number from 1 to 65535"
 	case "form-exposed":
-		w.lf = localForwardForm{Open: true, Listen: listenAll, Port: "5353", Target: "dns-box:53", Proto: 1}
+		w.lf = localForwardForm{Open: true, Listen: listenAll, Port: "5353", Target: "dns-box", TPort: "53", Proto: 1}
 	case "form-custom":
-		w.lf = localForwardForm{Open: true, Listen: listenCustom, CustomIP: "192.0.2", Port: "8080", Target: "192.168.1.10:80"}
+		w.lf = localForwardForm{Open: true, Listen: listenCustom, CustomIP: "192.0.2", Port: "8080", Target: "192.168.1.10", TPort: "80"}
 		w.lf.Err = "Enter a valid IP address, such as 192.0.2.10"
 	case "edit":
 		w.lf.load(profile.LocalForward{Protocol: profile.PortForwardTCP, ListenAddr: "127.0.0.1:2222", TargetAddr: "remote-pc:22"})

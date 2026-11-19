@@ -49,8 +49,15 @@ func (w *workbench) localForwardForm(c *ui.Context, tk *theme.Tokens, sel *selec
 		if f.exposed() {
 			feedback.Alert(c, tr("Anyone who can reach this computer can use this forward."), feedback.AlertProps{Type: feedback.Warning})
 		}
-		w.field(c, tk, tr("Target"), tr("A device name or IP on the network behind this profile, then the port."), func() {
-			field.AutoComplete(c.Key("lftarget"), &f.Target, field.AutoCompleteProps{Size: sz, Placeholder: tr("host:port, e.g. remote-pc:22"), Options: f.Targets})
+		w.field(c, tk, tr("Target"), tr("A device name or IP on the network behind this profile, and its port."), func() {
+			ui.Row(c).Gap(8).Wrap().Children(func() {
+				ui.Column(c).Grow(1).Basis(220).Children(func() {
+					field.AutoComplete(c.Key("lftarget"), &f.Target, field.AutoCompleteProps{Size: sz, Placeholder: tr("Device or IP, e.g. remote-pc"), Options: f.Targets})
+				})
+				ui.Column(c).Width(110).Children(func() {
+					field.Input(c.Key("lftport"), &f.TPort, field.InputProps{Size: sz, Placeholder: tr("Port")})
+				})
+			})
 		})
 		if f.Err != "" {
 			ui.Text(c, tr(f.Err)).FontSize(tk.FontSizeSM).TextColor(tk.Error)

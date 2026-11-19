@@ -25,6 +25,7 @@ type localForwardForm struct {
 	CustomIP string
 	Port     string
 	Target   string
+	TPort    string
 	Err      string
 	Remove   *profile.LocalForwardKey
 	Removing bool
@@ -61,12 +62,11 @@ func (f *localForwardForm) rule() (profile.LocalForward, string) {
 	if err != nil || port < 1 || port > 65535 {
 		return profile.LocalForward{}, "Port must be a number from 1 to 65535"
 	}
-	target := strings.TrimSpace(f.Target)
-	host, tport, err := net.SplitHostPort(target)
-	if err != nil || host == "" {
-		return profile.LocalForward{}, "Target must look like host:port, for example remote-pc:22"
+	host := strings.Trim(strings.TrimSpace(f.Target), "[]")
+	if host == "" || strings.ContainsAny(host, " /") {
+		return profile.LocalForward{}, "Enter a device name or IP, for example remote-pc"
 	}
-	n, err := strconv.Atoi(tport)
+	n, err := strconv.Atoi(strings.TrimSpace(f.TPort))
 	if err != nil || n < 1 || n > 65535 {
 		return profile.LocalForward{}, "Target port must be a number from 1 to 65535"
 	}
@@ -74,7 +74,7 @@ func (f *localForwardForm) rule() (profile.LocalForward, string) {
 	if f.Proto == 1 {
 		proto = profile.PortForwardUDP
 	}
-	rule := profile.LocalForward{Protocol: proto, ListenAddr: net.JoinHostPort(ip.String(), strconv.Itoa(port)), TargetAddr: target}
+	rule := profile.LocalForward{Protocol: proto, ListenAddr: net.JoinHostPort(ip.String(), strconv.Itoa(port)), TargetAddr: net.JoinHostPort(host, strconv.Itoa(n))}
 	rule.Normalize()
 	if rule.Validate() != nil {
 		return profile.LocalForward{}, "Enter a valid IP address, such as 192.0.2.10"
@@ -84,7 +84,8 @@ func (f *localForwardForm) rule() (profile.LocalForward, string) {
 
 func (f *localForwardForm) load(r profile.LocalForward) {
 	host, port, _ := net.SplitHostPort(r.ListenAddr)
-	*f = localForwardForm{Open: true, Editing: new(r.Key()), Port: port, Target: r.TargetAddr, Listen: listenCustom, CustomIP: host}
+	thost, tport, _ := net.SplitHostPort(r.TargetAddr)
+	*f = localForwardForm{Open: true, Editing: new(r.Key()), Port: port, Target: thost, TPort: tport, Listen: listenCustom, CustomIP: host}
 	if r.Protocol == profile.PortForwardUDP {
 		f.Proto = 1
 	}
