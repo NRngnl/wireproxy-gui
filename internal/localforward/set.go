@@ -40,6 +40,7 @@ type entry struct {
 	dialErr string
 	cancel  context.CancelFunc
 	closer  func()
+	unwatch func() bool
 }
 
 // Set reconciles listeners against a rule list and tracks per-rule state.
@@ -189,7 +190,7 @@ func (s *Set) start(rule profile.LocalForward) {
 		e.err = bindMessage(err)
 	} else {
 		e.status = StatusActive
-		context.AfterFunc(ctx, e.closer)
+		e.unwatch = context.AfterFunc(ctx, e.closer)
 	}
 	s.mu.Lock()
 	s.entries[rule.Key()] = e
@@ -235,6 +236,9 @@ func (s *Set) dialFailed(e *entry, err error) {
 }
 
 func (e *entry) stop() {
+	if e.unwatch != nil {
+		e.unwatch()
+	}
 	e.cancel()
 	if e.closer != nil {
 		e.closer()

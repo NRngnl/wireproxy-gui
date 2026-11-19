@@ -17,16 +17,11 @@ func RelayTCP(ctx context.Context, client, target net.Conn, timeouts Timeouts) {
 	defer wrappedClient.Close()
 	defer wrappedTarget.Close()
 
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = wrappedClient.Close()
-			_ = wrappedTarget.Close()
-		case <-done:
-		}
-	}()
+	stop := context.AfterFunc(ctx, func() {
+		_ = wrappedClient.Close()
+		_ = wrappedTarget.Close()
+	})
+	defer stop()
 
 	var wg sync.WaitGroup
 	wg.Go(func() {

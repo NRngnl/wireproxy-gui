@@ -8,6 +8,7 @@ type Signal struct {
 	mu      sync.Mutex
 	pending map[string]struct{}
 	ready   chan struct{}
+	parent  *Signal
 }
 
 // NewSignal returns an empty Signal.
@@ -15,11 +16,37 @@ func NewSignal() *Signal {
 	return &Signal{pending: map[string]struct{}{}, ready: make(chan struct{}, 1)}
 }
 
+// Forward sends this Signal's pending and future marks to parent.
+func (s *Signal) Forward(parent *Signal) {
+	for _, id := range s.forwardTo(parent) {
+		parent.Mark(id)
+	}
+}
+
+func (s *Signal) forwardTo(parent *Signal) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parent = parent
+	ids := make([]string, 0, len(s.pending))
+	for id := range s.pending {
+		ids = append(ids, id)
+	}
+	clear(s.pending)
+	return ids
+}
+
 // Mark records that profileID changed.
 func (s *Signal) Mark(profileID string) {
 	s.mu.Lock()
-	s.pending[profileID] = struct{}{}
+	parent := s.parent
+	if parent == nil {
+		s.pending[profileID] = struct{}{}
+	}
 	s.mu.Unlock()
+	if parent != nil {
+		parent.Mark(profileID)
+		return
+	}
 	select {
 	case s.ready <- struct{}{}:
 	default:

@@ -204,14 +204,7 @@ func (r *Runner) removeBacking(profileID string, kind profile.BackendKind) {
 }
 
 func (r *Runner) forward(kind profile.BackendKind, source Backend) {
-	changes := source.ForwardChanges()
-	go func() {
-		for range changes.Ready() {
-			for _, id := range changes.Take() {
-				r.forwardChanges.Mark(id)
-			}
-		}
-	}()
+	source.ForwardChanges().Forward(r.forwardChanges)
 	go func() {
 		for event := range source.Events() {
 			if event.Type == connection.EventStopped || event.Type == connection.EventError {
