@@ -1,9 +1,12 @@
 package tailscale
 
 import (
+	"context"
 	"errors"
 	"net/netip"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/key"
@@ -41,24 +44,45 @@ func TestResolveTarget(t *testing.T) {
 	}
 }
 
-func TestResolveWithPeerWaitBudget(t *testing.T) {
+type fakePeerNode struct {
+	tsNode
+	notify chan func()
+}
+
+func (n *fakePeerNode) WatchPeers(ctx context.Context, changed func()) error {
+	n.notify <- changed
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestPeerViewWaitsForPeersAndCachesUntilChange(t *testing.T) {
 	peer := &ipnstate.PeerStatus{DNSName: "pc.tail.ts.net.", TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.2")}}
 	populated := &ipnstate.Status{Peer: map[key.NodePublic]*ipnstate.PeerStatus{key.NewNode().Public(): peer}}
-
-	late := &fakeLocalClient{statusFunc: func(call int) (*ipnstate.Status, error) {
-		if call < 3 {
-			return &ipnstate.Status{}, nil
+	var ready atomic.Bool
+	client := &fakeLocalClient{statusFunc: func(int) (*ipnstate.Status, error) {
+		if ready.Load() {
+			return populated, nil
 		}
-		return populated, nil
+		return &ipnstate.Status{}, nil
 	}}
-	ip, err := resolveWithPeerWait(t.Context(), &statusCache{client: late}, "pc")
-	if err != nil || ip.String() != "100.64.0.2" {
-		t.Fatalf("late peer: %v %v", ip, err)
+	node := &fakePeerNode{notify: make(chan func(), 1)}
+	view := newPeerView(t.Context(), node, client)
+	changed := <-node.notify
+	result := make(chan error, 1)
+	go func() {
+		_, err := view.resolve(t.Context(), "pc")
+		result <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	ready.Store(true)
+	changed()
+	err := <-result
+	if err != nil {
+		t.Fatalf("late peer: %v", err)
 	}
-
-	known := &fakeLocalClient{status: populated}
-	_, err = resolveWithPeerWait(t.Context(), &statusCache{client: known}, "nope")
-	if !errors.Is(err, errTargetNotFound) || known.statusCalls != 2 {
-		t.Fatalf("miss with peers should fail at once: %v after %d calls", err, known.statusCalls)
+	calls := client.calls()
+	_, err = view.resolve(t.Context(), "nope")
+	if !errors.Is(err, errTargetNotFound) || client.calls() != calls {
+		t.Fatalf("cached miss: %v after %d status calls", err, client.calls()-calls)
 	}
 }

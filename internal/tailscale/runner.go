@@ -168,6 +168,7 @@ type process struct {
 	listener      net.Listener
 	node          tsNode
 	localForwards *localforward.Set
+	peers         *peerView
 	forwardConns  []io.Closer // TCP listeners and UDP PacketConns for active port forwards
 }
 

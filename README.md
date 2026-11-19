@@ -228,7 +228,8 @@ For example, TCP `127.0.0.1:2222` to `remote-pc:22` lets
   Tailscale IP, or an IP inside a subnet route advertised by an online peer.
   The embedded node accepts subnet routes from your tailnet (RouteAll), so SOCKS5 connections of this profile also reach approved subnet routes, and a routed IP is only
   reachable when the route is advertised, approved and its router is online. Names are never resolved by the host. A target that matches no peer or route
-  fails closed. If the tailnet has no peers yet, the dial waits up to 5 seconds.
+  fails closed. If the tailnet has no peers yet, the dial waits for the first peer
+  update, within the 30-second dial timeout.
 - WireGuard targets: an IP address, or a name when the WireGuard config sets
   `DNS`. A name with no `DNS` fails with a clear error instead of using the host
   resolver.

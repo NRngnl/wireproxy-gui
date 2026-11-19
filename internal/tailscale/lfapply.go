@@ -4,7 +4,6 @@ import (
 	"context"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/localforward"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
@@ -12,7 +11,16 @@ import (
 )
 
 func (p *process) startLocalForwards(ctx context.Context, node tsNode, timeouts socksconn.Timeouts, rules []profile.LocalForward, changed func()) {
-	set := localforward.New(ctx, localForwardDialer(node), timeouts, changed)
+	dialer := localforward.Dialer{TCP: noNetstack, UDP: noNetstack}
+	client, err := node.LocalClient()
+	if err == nil {
+		peers := newPeerView(ctx, node, client)
+		dialer = localForwardDialer(node, peers)
+		p.mu.Lock()
+		p.peers = peers
+		p.mu.Unlock()
+	}
+	set := localforward.New(ctx, dialer, timeouts, changed)
 	p.mu.Lock()
 	closed := p.closed
 	if !closed {
@@ -72,17 +80,15 @@ func (r *Runner) LocalForwardTargets(profileID string) []string {
 	if proc == nil {
 		return nil
 	}
-	node := proc.getNode()
-	if node == nil {
+	proc.mu.Lock()
+	peers := proc.peers
+	proc.mu.Unlock()
+	if peers == nil {
 		return nil
 	}
-	client, err := node.LocalClient()
-	if err != nil {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), r.timeouts.Dial)
 	defer cancel()
-	status, err := client.Status(ctx)
+	status, _, err := peers.get(ctx)
 	if err != nil {
 		return nil
 	}
