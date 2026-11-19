@@ -37,6 +37,10 @@ const (
 	// UDPBufferSize holds a maximum-size UDP datagram plus its SOCKS5 UDP header.
 	UDPBufferSize = 64*1024 + 512
 
+	// NOTE: keepAlivePeriod is the keepalive idle time and probe interval. It
+	// must stay below magicsock's 45 s sessionActiveTimeout so a quiet session
+	// keeps the direct UDP path warm; replied probes make the NAT mapping
+	// assured (Linux conntrack 120 s, versus 30 s unreplied).
 	keepAlivePeriod = 30 * time.Second
 )
 
@@ -846,6 +850,9 @@ func DialContext(parentCtx, reqCtx context.Context, timeout time.Duration) (cont
 }
 
 func enableTCPKeepAlive(conn net.Conn) {
+	if enableGvisorKeepAlive(conn, keepAlivePeriod) {
+		return
+	}
 	if ka, ok := conn.(interface{ SetKeepAlive(bool) error }); ok {
 		_ = ka.SetKeepAlive(true)
 	}

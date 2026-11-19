@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"reflect"
 	"sync/atomic"
 	"time"
 
@@ -17,9 +16,7 @@ import (
 )
 
 var (
-	errGvisorRead     = errors.New("gvisor udp read")
-	tcpipEndpointType = reflect.TypeFor[tcpip.Endpoint]()
-	waiterQueueType   = reflect.TypeFor[*waiter.Queue]()
+	errGvisorRead = errors.New("gvisor udp read")
 )
 
 type udpSessionConn interface {
@@ -67,7 +64,7 @@ func newGvisorUDPConn(raw net.Conn, idleTimeout time.Duration) (*gvisorUDPConn, 
 	if !ok {
 		return nil, false
 	}
-	ep, wq, ok := extractGvisorUDP(gc)
+	ep, wq, ok := socksconn.GvisorEndpoint(gc)
 	if !ok {
 		return nil, false
 	}
@@ -78,32 +75,6 @@ func newGvisorUDPConn(raw net.Conn, idleTimeout time.Duration) (*gvisorUDPConn, 
 		idleTimeout: idleTimeout,
 		created:     time.Now(),
 	}, true
-}
-
-func extractGvisorUDP(conn *gonet.UDPConn) (tcpip.Endpoint, *waiter.Queue, bool) {
-	if conn == nil {
-		return nil, nil, false
-	}
-	v := reflect.ValueOf(conn).Elem()
-	epField := v.FieldByName("ep")
-	wqField := v.FieldByName("wq")
-	if !epField.IsValid() || !wqField.IsValid() || !epField.CanAddr() || !wqField.CanAddr() {
-		return nil, nil, false
-	}
-	if epField.Type() != tcpipEndpointType || wqField.Type() != waiterQueueType {
-		return nil, nil, false
-	}
-	epVal := reflect.NewAt(tcpipEndpointType, epField.Addr().UnsafePointer()).Elem()
-	wqVal := reflect.NewAt(waiterQueueType, wqField.Addr().UnsafePointer()).Elem()
-	ep, ok := reflect.TypeAssert[tcpip.Endpoint](epVal)
-	if !ok || ep == nil {
-		return nil, nil, false
-	}
-	wq, ok := reflect.TypeAssert[*waiter.Queue](wqVal)
-	if !ok || wq == nil {
-		return nil, nil, false
-	}
-	return ep, wq, true
 }
 
 func (c *gvisorUDPConn) recordActivity() {
