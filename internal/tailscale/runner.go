@@ -1307,9 +1307,13 @@ func (p *process) close() {
 func (r *Runner) removeProcess(profileID string, proc *process) {
 	proc.mu.Lock()
 	forwards := proc.localForwards
+	peers := proc.peers
 	proc.mu.Unlock()
 	if forwards != nil {
 		forwards.Close()
+	}
+	if peers != nil {
+		peers.wait()
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

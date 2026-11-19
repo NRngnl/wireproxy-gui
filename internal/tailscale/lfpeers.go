@@ -4,88 +4,107 @@ import (
 	"context"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 )
 
 type peerWatcher interface {
-	WatchPeers(ctx context.Context, changed func()) error
+	WatchPeers(ctx context.Context, initial func(*ipnstate.Status), changed func()) error
 }
 
 type peerView struct {
-	client  localClient
-	mu      sync.Mutex
-	status  *ipnstate.Status
-	fresh   bool
-	watched bool
-	changed chan struct{}
+	ctx      context.Context
+	client   localClient
+	watcher  peerWatcher
+	status   atomic.Pointer[ipnstate.Status]
+	ready    chan struct{}
+	readyOne sync.Once
+	refresh  chan struct{}
+	watching atomic.Bool
+	wg       sync.WaitGroup
 }
 
 func newPeerView(ctx context.Context, node tsNode, client localClient) *peerView {
-	v := &peerView{client: client, changed: make(chan struct{})}
-	watcher, ok := node.(peerWatcher)
-	if ok {
-		v.watched = true
-		go func() {
-			_ = watcher.WatchPeers(ctx, func() { v.invalidate(true) })
-			v.invalidate(false)
-		}()
-	}
+	v := &peerView{ctx: ctx, client: client, ready: make(chan struct{}), refresh: make(chan struct{}, 1)}
+	v.watcher, _ = node.(peerWatcher)
+	v.wg.Go(v.refresher)
+	v.startWatch()
 	return v
 }
 
-func (v *peerView) invalidate(watched bool) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.fresh = false
-	v.watched = watched
-	close(v.changed)
-	v.changed = make(chan struct{})
+func (v *peerView) startWatch() {
+	if v.watcher == nil || v.ctx.Err() != nil || !v.watching.CompareAndSwap(false, true) {
+		return
+	}
+	v.wg.Go(func() {
+		defer v.watching.Store(false)
+		_ = v.watcher.WatchPeers(v.ctx, v.publish, v.kick)
+	})
 }
 
-func (v *peerView) get(ctx context.Context) (*ipnstate.Status, <-chan struct{}, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if !v.fresh || !v.watched {
-		status, err := v.client.Status(ctx)
-		if err != nil {
-			return nil, nil, err
+func (v *peerView) publish(status *ipnstate.Status) {
+	v.status.Store(status)
+	v.readyOne.Do(func() { close(v.ready) })
+}
+
+func (v *peerView) kick() {
+	select {
+	case v.refresh <- struct{}{}:
+	default:
+	}
+}
+
+func (v *peerView) refresher() {
+	for {
+		select {
+		case <-v.ctx.Done():
+			return
+		case <-v.refresh:
+			status, err := v.client.Status(v.ctx)
+			if err == nil {
+				v.publish(status)
+			}
 		}
-		v.status, v.fresh = status, true
 	}
-	if !v.watched {
-		return v.status, nil, nil
+}
+
+func (v *peerView) wait() {
+	v.wg.Wait()
+}
+
+func (v *peerView) get(ctx context.Context) (*ipnstate.Status, error) {
+	if !v.watching.Load() {
+		v.startWatch()
+		if !v.watching.Load() {
+			return v.client.Status(ctx)
+		}
 	}
-	return v.status, v.changed, nil
+	select {
+	case <-v.ready:
+		return v.status.Load(), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (v *peerView) resolve(ctx context.Context, host string) (netip.Addr, error) {
-	for {
-		status, changed, err := v.get(ctx)
-		if err != nil {
-			return netip.Addr{}, err
-		}
-		ip, err := resolveTarget(status, host)
-		if err == nil || len(status.Peer) > 0 || changed == nil {
-			return ip, err
-		}
-		select {
-		case <-ctx.Done():
-			return netip.Addr{}, err
-		case <-changed:
-		}
+	status, err := v.get(ctx)
+	if err != nil {
+		return netip.Addr{}, err
 	}
+	return resolveTarget(status, host)
 }
 
-// WatchPeers calls changed whenever the tailnet's self node or peer set changes, until ctx ends or the
-// watch fails.
-func (n *realNode) WatchPeers(ctx context.Context, changed func()) error {
+// WatchPeers reports the first status to initial and calls changed whenever the self node, the peer set or a
+// peer's online state changes, until ctx ends or the watch fails.
+func (n *realNode) WatchPeers(ctx context.Context, initial func(*ipnstate.Status), changed func()) error {
 	client, err := n.server.LocalClient()
 	if err != nil {
 		return err
 	}
-	watcher, err := client.WatchIPNBus(ctx, ipn.NotifyInitialStatus|ipn.NotifyPeerChanges)
+	watcher, err := client.WatchIPNBus(ctx, ipn.NotifyInitialStatus|ipn.NotifyPeerChanges|ipn.NotifyPeerPatches)
 	if err != nil {
 		return err
 	}
@@ -95,8 +114,20 @@ func (n *realNode) WatchPeers(ctx context.Context, changed func()) error {
 		if err != nil {
 			return err
 		}
-		if notify.InitialStatus != nil || notify.SelfChange != nil || len(notify.PeersChanged) > 0 || len(notify.PeersRemoved) > 0 {
+		if notify.InitialStatus != nil {
+			initial(notify.InitialStatus)
+		}
+		if notify.SelfChange != nil || len(notify.PeersChanged) > 0 || len(notify.PeersRemoved) > 0 || onlineChanged(notify) {
 			changed()
 		}
 	}
+}
+
+func onlineChanged(notify ipn.Notify) bool {
+	for _, patch := range notify.PeerChangedPatch {
+		if patch.Online != nil {
+			return true
+		}
+	}
+	return false
 }

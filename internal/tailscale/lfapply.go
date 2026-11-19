@@ -86,9 +86,9 @@ func (r *Runner) LocalForwardTargets(profileID string) []string {
 	if peers == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), r.timeouts.Dial)
+	ctx, cancel := context.WithTimeout(peers.ctx, r.timeouts.Dial)
 	defer cancel()
-	status, _, err := peers.get(ctx)
+	status, err := peers.get(ctx)
 	if err != nil {
 		return nil
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/netip"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,43 +45,42 @@ func TestResolveTarget(t *testing.T) {
 
 type fakePeerNode struct {
 	tsNode
-	notify chan func()
+	initial chan func(*ipnstate.Status)
 }
 
-func (n *fakePeerNode) WatchPeers(ctx context.Context, changed func()) error {
-	n.notify <- changed
+func (n *fakePeerNode) WatchPeers(ctx context.Context, initial func(*ipnstate.Status), _ func()) error {
+	n.initial <- initial
 	<-ctx.Done()
 	return ctx.Err()
 }
 
-func TestPeerViewWaitsForPeersAndCachesUntilChange(t *testing.T) {
+func TestPeerViewWaitsForInitialStatusAndNeverPollsWhileWatching(t *testing.T) {
 	peer := &ipnstate.PeerStatus{DNSName: "pc.tail.ts.net.", TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.2")}}
 	populated := &ipnstate.Status{Peer: map[key.NodePublic]*ipnstate.PeerStatus{key.NewNode().Public(): peer}}
-	var ready atomic.Bool
-	client := &fakeLocalClient{statusFunc: func(int) (*ipnstate.Status, error) {
-		if ready.Load() {
-			return populated, nil
-		}
-		return &ipnstate.Status{}, nil
-	}}
-	node := &fakePeerNode{notify: make(chan func(), 1)}
-	view := newPeerView(t.Context(), node, client)
-	changed := <-node.notify
+	client := &fakeLocalClient{status: populated}
+	node := &fakePeerNode{initial: make(chan func(*ipnstate.Status), 1)}
+	ctx, cancel := context.WithCancel(t.Context())
+	view := newPeerView(ctx, node, client)
+	defer view.wait()
+	defer cancel()
+	initial := <-node.initial
 	result := make(chan error, 1)
 	go func() {
 		_, err := view.resolve(t.Context(), "pc")
 		result <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
-	ready.Store(true)
-	changed()
+	select {
+	case err := <-result:
+		t.Fatalf("resolved before the initial status: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	initial(populated)
 	err := <-result
 	if err != nil {
-		t.Fatalf("late peer: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	calls := client.calls()
 	_, err = view.resolve(t.Context(), "nope")
-	if !errors.Is(err, errTargetNotFound) || client.calls() != calls {
-		t.Fatalf("cached miss: %v after %d status calls", err, client.calls()-calls)
+	if !errors.Is(err, errTargetNotFound) || client.calls() != 0 {
+		t.Fatalf("miss: %v after %d status calls", err, client.calls())
 	}
 }
