@@ -221,5 +221,10 @@
   "local forward target must be host:port": "local forward target must be host:port",
   "duplicate local forward listen address": "duplicate local forward listen address",
   "local forward listen address clashes with the SOCKS5 bind address": "local forward listen address clashes with the SOCKS5 bind address",
-  "port in use": "port in use"
+  "port in use": "port in use",
+  "Direct": "Direct",
+  "Relay": "Relay",
+  "Relay · {{.Region}}": "Relay · {{.Region}}",
+  "Traffic goes straight to this device.": "Traffic goes straight to this device.",
+  "Traffic goes through a relay server, which adds latency. It switches to a direct path when one opens.": "Traffic goes through a relay server, which adds latency. It switches to a direct path when one opens."
 }

@@ -119,10 +119,26 @@ func (w *workbench) localForwardStatus(c *ui.Context, r profile.LocalForward, st
 	label, color := statePill(st)
 	ui.Row(c).Gap(6).Shrink(0).Children(func() {
 		display.Tag(c, label, display.TagProps{Color: color, Size: theme.Small})
+		peerPathTag(c, st.Path)
 		if !loopbackListen(r.ListenAddr) {
 			display.Tag(c, tr("Exposed"), display.TagProps{Color: display.TagWarning, Size: theme.Small})
 		}
 	})
+}
+
+func peerPathTag(c *ui.Context, path application.PeerPath) {
+	switch path.Kind {
+	case application.PeerPathDirect:
+		tag := display.Tag(c, tr("Direct"), display.TagProps{Color: display.TagGray, Size: theme.Small})
+		overlay.Tooltip(c, tag, tr("Traffic goes straight to this device."), overlay.TooltipProps{})
+	case application.PeerPathRelay:
+		label := tr("Relay")
+		if path.Relay != "" {
+			label = tr("Relay · {{.Region}}", map[string]any{"Region": path.Relay})
+		}
+		tag := display.Tag(c, label, display.TagProps{Color: display.TagWarning, Size: theme.Small})
+		overlay.Tooltip(c, tag, tr("Traffic goes through a relay server, which adds latency. It switches to a direct path when one opens."), overlay.TooltipProps{})
+	}
 }
 
 func loopbackListen(addr string) bool {

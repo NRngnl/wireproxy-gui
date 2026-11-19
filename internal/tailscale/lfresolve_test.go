@@ -60,7 +60,7 @@ func TestPeerViewWaitsForInitialStatusAndNeverPollsWhileWatching(t *testing.T) {
 	client := &fakeLocalClient{status: populated}
 	node := &fakePeerNode{initial: make(chan func(*ipnstate.Status), 1)}
 	ctx, cancel := context.WithCancel(t.Context())
-	view := newPeerView(ctx, node, client)
+	view := newPeerView(ctx, node, client, nil)
 	defer view.wait()
 	defer cancel()
 	initial := <-node.initial

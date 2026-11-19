@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/NRngnl/wireproxy-gui/internal/application"
@@ -37,6 +38,22 @@ func (f *fixture) localForwardScenario(name string, home, ts *profile.Profile) {
 		}
 		f.statuses[ts.ID] = application.StatusRunning
 		f.setStates(ts.ID, nil, nil, ts.LocalForwards)
+		f.profiles = []profile.Profile{*ts}
+	case "lf-ts-paths", "lf-ts-many":
+		ts.TailscaleConfig.Hostname, ts.TailscaleConfig.Authenticated = "travel-node", true
+		ts.LocalForwards = []profile.LocalForward{
+			rule(profile.PortForwardTCP, "127.0.0.1:2222", "remote-pc:22"),
+			rule(profile.PortForwardTCP, "127.0.0.1:2223", "build-server-with-a-very-long-machine-name.tail1234.ts.net:22"),
+			rule(profile.PortForwardUDP, "127.0.0.1:5353", "dns-box:53"),
+			rule(profile.PortForwardTCP, "[::1]:3306", "10.20.0.5:3306"),
+		}
+		f.statuses[ts.ID] = application.StatusRunning
+		f.setStates(ts.ID, nil, nil, ts.LocalForwards)
+		paths := []application.PeerPath{{Kind: application.PeerPathDirect}, {Kind: application.PeerPathRelay, Relay: "tok"}, {Kind: application.PeerPathRelay}}
+		for i, path := range paths {
+			f.states[ts.ID][i].Path = path
+		}
+		f.manyTargets = name == "lf-ts-many"
 		f.profiles = []profile.Profile{*ts}
 	case "lf-saved":
 		home.LocalForwards = []profile.LocalForward{rule(profile.PortForwardTCP, "127.0.0.1:2222", "remote-pc:22"), rule(profile.PortForwardUDP, "127.0.0.1:5353", "dns-box:53")}
@@ -115,6 +132,13 @@ func (f *fixture) LocalForwardStates(id string) []application.LocalForwardState 
 	return slices.Clone(f.states[id])
 }
 
-func (*fixture) LocalForwardTargets(string) []string {
+func (f *fixture) LocalForwardTargets(string) []string {
+	if f.manyTargets {
+		names := make([]string, 20)
+		for i := range names {
+			names[i] = fmt.Sprintf("workstation-%02d-with-a-long-machine-name.tail1234.ts.net", i+1)
+		}
+		return names
+	}
 	return []string{"remote-pc", "dns-box", "nas.tail1234.ts.net", "192.168.1.10"}
 }

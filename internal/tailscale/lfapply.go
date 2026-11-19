@@ -14,7 +14,7 @@ func (p *process) startLocalForwards(ctx context.Context, node tsNode, timeouts 
 	dialer := localforward.Dialer{TCP: noNetstack, UDP: noNetstack}
 	client, err := node.LocalClient()
 	if err == nil {
-		peers := newPeerView(ctx, node, client)
+		peers := newPeerView(ctx, node, client, changed)
 		dialer = localForwardDialer(node, peers)
 		p.mu.Lock()
 		p.peers = peers
@@ -69,7 +69,28 @@ func (r *Runner) LocalForwardStates(profileID string) []localforward.State {
 	if set == nil {
 		return nil
 	}
-	return set.States()
+	states := set.States()
+	r.mu.Lock()
+	proc := r.procs[strings.TrimSpace(profileID)]
+	r.mu.Unlock()
+	if proc == nil {
+		return states
+	}
+	proc.mu.Lock()
+	peers := proc.peers
+	proc.mu.Unlock()
+	if peers == nil {
+		return states
+	}
+	peers.kick()
+	status := peers.status.Load()
+	if status == nil {
+		return states
+	}
+	for i := range states {
+		states[i].Path = targetPath(status, states[i].Target)
+	}
+	return states
 }
 
 // LocalForwardTargets lists the DNS names of the tailnet peers of a running profile.

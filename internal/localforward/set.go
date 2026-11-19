@@ -157,7 +157,7 @@ func (s *Set) States() []State {
 		if e.status == StatusActive {
 			msg = e.dialErr
 		}
-		states = append(states, State{Key: key, Status: e.status, Err: msg})
+		states = append(states, State{Key: key, Target: e.rule.TargetAddr, Status: e.status, Err: msg})
 	}
 	return states
 }

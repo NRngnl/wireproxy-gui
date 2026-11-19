@@ -30,6 +30,14 @@ const (
 // LocalForwardState reports the live status of the rule identified by Key.
 type LocalForwardState = connection.LocalForwardState
 
+// PeerPath tells how a tailnet peer is reached; the Kind constants name its values.
+type PeerPath = connection.PeerPath
+
+const (
+	PeerPathDirect = connection.PeerPathDirect
+	PeerPathRelay  = connection.PeerPathRelay
+)
+
 // AddLocalForward stores a new rule and, while the profile is connected, starts listening on it.
 func (s *Service) AddLocalForward(ctx context.Context, profileID string, rule profile.LocalForward) error {
 	return s.editLocalForwards(ctx, profileID, func(rules []profile.LocalForward) ([]profile.LocalForward, error) {

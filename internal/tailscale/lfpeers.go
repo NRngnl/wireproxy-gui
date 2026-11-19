@@ -2,12 +2,15 @@ package tailscale
 
 import (
 	"context"
+	"maps"
 	"net/netip"
 	"sync"
 	"sync/atomic"
 
+	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/types/key"
 )
 
 type peerWatcher interface {
@@ -24,10 +27,13 @@ type peerView struct {
 	refresh  chan struct{}
 	watching atomic.Bool
 	wg       sync.WaitGroup
+	onPaths  func()
+	mu       sync.Mutex
+	paths    map[key.NodePublic]connection.PeerPath
 }
 
-func newPeerView(ctx context.Context, node tsNode, client localClient) *peerView {
-	v := &peerView{ctx: ctx, client: client, ready: make(chan struct{}), refresh: make(chan struct{}, 1)}
+func newPeerView(ctx context.Context, node tsNode, client localClient, onPaths func()) *peerView {
+	v := &peerView{ctx: ctx, client: client, onPaths: onPaths, ready: make(chan struct{}), refresh: make(chan struct{}, 1)}
 	v.watcher, _ = node.(peerWatcher)
 	v.wg.Go(v.refresher)
 	v.startWatch()
@@ -47,6 +53,14 @@ func (v *peerView) startWatch() {
 func (v *peerView) publish(status *ipnstate.Status) {
 	v.status.Store(status)
 	v.readyOne.Do(func() { close(v.ready) })
+	paths := peerPaths(status)
+	v.mu.Lock()
+	same := maps.Equal(v.paths, paths)
+	v.paths = paths
+	v.mu.Unlock()
+	if !same && v.onPaths != nil {
+		v.onPaths()
+	}
 }
 
 func (v *peerView) kick() {
@@ -117,17 +131,8 @@ func (n *realNode) WatchPeers(ctx context.Context, initial func(*ipnstate.Status
 		if notify.InitialStatus != nil {
 			initial(notify.InitialStatus)
 		}
-		if notify.SelfChange != nil || len(notify.PeersChanged) > 0 || len(notify.PeersRemoved) > 0 || onlineChanged(notify) {
+		if notify.SelfChange != nil || len(notify.PeersChanged) > 0 || len(notify.PeersRemoved) > 0 || len(notify.PeerChangedPatch) > 0 {
 			changed()
 		}
 	}
-}
-
-func onlineChanged(notify ipn.Notify) bool {
-	for _, patch := range notify.PeerChangedPatch {
-		if patch.Online != nil {
-			return true
-		}
-	}
-	return false
 }

@@ -216,12 +216,25 @@ func (p *LocalForwardsPanel) status(rule profile.LocalForward) string {
 				return "error: " + s.Err
 			}
 			if s.Err != "" {
-				return "active, last dial failed: " + s.Err
+				return "active, last dial failed: " + s.Err + pathText(s.Path)
 			}
-			return "active"
+			return "active" + pathText(s.Path)
 		}
 	}
 	return "starting"
+}
+
+func pathText(path connection.PeerPath) string {
+	switch path.Kind {
+	case connection.PeerPathDirect:
+		return ", Direct"
+	case connection.PeerPathRelay:
+		if path.Relay != "" {
+			return ", Relay · " + path.Relay
+		}
+		return ", Relay"
+	}
+	return ""
 }
 
 // View renders the panel.

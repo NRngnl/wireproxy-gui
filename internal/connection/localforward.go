@@ -13,6 +13,23 @@ const (
 // LocalForwardState reports one rule's status; Err is the bind failure for LocalForwardError, or the last dial failure for LocalForwardActive.
 type LocalForwardState struct {
 	Key    profile.LocalForwardKey
+	Target string
 	Status LocalForwardStatus
 	Err    string
+	Path   PeerPath
+}
+
+// PeerPathKind tells how a tailnet peer is currently reached.
+type PeerPathKind string
+
+const (
+	PeerPathUnknown PeerPathKind = ""
+	PeerPathDirect  PeerPathKind = "direct"
+	PeerPathRelay   PeerPathKind = "relay"
+)
+
+// PeerPath is the current route to the tailnet peer a rule targets. Relay names the DERP region when Kind is PeerPathRelay.
+type PeerPath struct {
+	Kind  PeerPathKind
+	Relay string
 }

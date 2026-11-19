@@ -26,6 +26,8 @@ type fixture struct {
 	logs     map[string][]application.LogEntry
 	changes  chan application.Change
 	states   map[string][]application.LocalForwardState
+
+	manyTargets bool
 }
 
 func newFixture(name string) *fixture {
