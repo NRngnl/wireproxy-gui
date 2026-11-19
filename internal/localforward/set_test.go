@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -299,57 +298,6 @@ func TestSetCloseDoesNotHangOnUDPSessions(t *testing.T) {
 	}
 }
 
-type countedConn struct {
-	net.Conn
-	open *atomic.Int32
-	once sync.Once
-}
-
-func (c *countedConn) Close() error {
-	c.once.Do(func() { c.open.Add(-1) })
-	return c.Conn.Close()
-}
-
-func TestUDPSessionsAreCapped(t *testing.T) {
-	var lc net.ListenConfig
-	probe, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	listen := probe.LocalAddr().String()
-	_ = probe.Close()
-	sink, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sink.Close()
-	var d net.Dialer
-	var open atomic.Int32
-	set := New(t.Context(), Dialer{UDP: func(ctx context.Context, addr string) (net.Conn, error) {
-		c, err := d.DialContext(ctx, "udp", addr)
-		if err != nil {
-			return nil, err
-		}
-		open.Add(1)
-		return &countedConn{Conn: c, open: &open}, nil
-	}}, socksconn.Timeouts{}, nil)
-	defer set.Close()
-	set.Apply([]profile.LocalForward{{Protocol: profile.PortForwardUDP, ListenAddr: listen, TargetAddr: sink.LocalAddr().String()}})
-	for range maxUDPSessions + 100 {
-		c, err := d.DialContext(t.Context(), "udp", listen)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, _ = c.Write([]byte("x"))
-		defer c.Close()
-		time.Sleep(time.Millisecond)
-	}
-	time.Sleep(300 * time.Millisecond)
-	if n := open.Load(); n > maxUDPSessions {
-		t.Fatalf("open target sockets = %d, cap %d", n, maxUDPSessions)
-	}
-}
-
 func TestCancelReleasesListenersWithoutClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	dialing := make(chan struct{})
@@ -380,4 +328,63 @@ func TestCancelReleasesListenersWithoutClose(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	set.Close()
+}
+
+func TestUDPSourcesKeepSessionsWhileLive(t *testing.T) {
+	var lc net.ListenConfig
+	echo, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			n, addr, err := echo.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = echo.WriteTo(buf[:n], addr)
+		}
+	}()
+	var d net.Dialer
+	var dials atomic.Int32
+	set := New(t.Context(), Dialer{UDP: func(ctx context.Context, addr string) (net.Conn, error) {
+		dials.Add(1)
+		return d.DialContext(ctx, "udp", addr)
+	}}, socksconn.Timeouts{}, nil)
+	defer set.Close()
+	probe, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listen := probe.LocalAddr().String()
+	_ = probe.Close()
+	set.Apply([]profile.LocalForward{{Protocol: profile.PortForwardUDP, ListenAddr: listen, TargetAddr: echo.LocalAddr().String()}})
+	const sources = 600
+	clients := make([]net.Conn, sources)
+	reply := make([]byte, 8)
+	for i := range clients {
+		c, err := d.DialContext(t.Context(), "udp", listen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		clients[i] = c
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _ = c.Write([]byte("x"))
+		_, err = c.Read(reply)
+		if err != nil {
+			t.Fatalf("source %d: %v", i, err)
+		}
+	}
+	_ = clients[0].SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _ = clients[0].Write([]byte("y"))
+	_, err = clients[0].Read(reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := dials.Load(); n != sources {
+		t.Fatalf("dials = %d, want %d: a live source lost its session", n, sources)
+	}
 }

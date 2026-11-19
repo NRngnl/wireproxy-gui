@@ -300,8 +300,8 @@ stop before process exit continues.
 SOCKS5 dial attempts are bounded by a 30-second timeout while honoring earlier
 cancellation. Active SOCKS5 TCP relays refresh a 5-minute idle read deadline on
 traffic in either direction and bound half-close drains to 60 seconds. SOCKS5
-UDP ASSOCIATE relays and Tailscale UDP port-forward sessions time out after 60
-seconds of inactivity.
+UDP ASSOCIATE relays, Tailscale UDP port-forward sessions and UDP local-forward
+sessions time out after 60 seconds of inactivity.
 
 ## Security Notes
 
