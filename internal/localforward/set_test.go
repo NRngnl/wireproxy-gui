@@ -388,3 +388,30 @@ func TestUDPSourcesKeepSessionsWhileLive(t *testing.T) {
 		t.Fatalf("dials = %d, want %d: a live source lost its session", n, sources)
 	}
 }
+
+func TestApplyDoesNotWaitForReleasedRuleSessions(t *testing.T) {
+	dialing := make(chan struct{})
+	release := make(chan struct{})
+	set := New(t.Context(), Dialer{TCP: func(context.Context, string) (net.Conn, error) {
+		close(dialing)
+		<-release
+		return nil, errDial
+	}}, socksconn.Timeouts{}, nil)
+	defer set.Close()
+	defer close(release)
+	listen := freeAddr(t)
+	set.Apply([]profile.LocalForward{tcpRule(listen, "127.0.0.1:1")})
+	client, err := dialTCP(t, listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	<-dialing
+	done := make(chan struct{})
+	go func() { set.Apply(nil); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Apply waited for a released rule's session")
+	}
+}

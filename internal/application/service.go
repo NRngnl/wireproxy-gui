@@ -119,7 +119,7 @@ type Service struct {
 	logs     map[string][]LogEntry
 	starts   map[string]*pendingStart
 	changes  chan Change
-	forwards map[string]*sync.Mutex
+	forwards sync.Mutex
 
 	shutdownOnce sync.Once
 	shutdownErr  error

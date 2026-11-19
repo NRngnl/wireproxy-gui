@@ -154,7 +154,6 @@ func (s *Set) States() []State {
 // Retry calls no-ops.
 func (s *Set) Close() {
 	s.op.Lock()
-	defer s.op.Unlock()
 	s.mu.Lock()
 	s.closed = true
 	entries := s.entries
@@ -164,6 +163,7 @@ func (s *Set) Close() {
 	for _, e := range entries {
 		e.stop()
 	}
+	s.op.Unlock()
 	s.running.Wait()
 }
 
