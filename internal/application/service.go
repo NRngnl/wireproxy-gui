@@ -313,13 +313,13 @@ func (s *Service) Delete(profileID string) error {
 		pending.cancel()
 		delete(s.starts, profileID)
 	}
+	if s.runtime != nil {
+		s.runtime.Stop(profileID)
+	}
 	s.profiles = next
 	delete(s.statuses, profileID)
 	delete(s.logs, profileID)
 	s.mu.Unlock()
-	if s.runtime != nil {
-		s.runtime.Stop(profileID)
-	}
 	s.notify(Change{ProfileID: profileID})
 	return nil
 }
@@ -562,14 +562,13 @@ func (s *Service) disconnect(profileID, message string) bool {
 		pending.cancel()
 		canceling = true
 	}
-	s.statuses[profileID] = StatusStopping
-	s.mu.Unlock()
 	stopped := false
 	if s.runtime != nil {
 		stopped = s.runtime.Stop(profileID)
 	}
-	s.mu.Lock()
-	if !stopped && !canceling && s.statuses[profileID] == StatusStopping {
+	if stopped || canceling {
+		s.statuses[profileID] = StatusStopping
+	} else {
 		s.statuses[profileID] = StatusStopped
 	}
 	if message != "" {
@@ -590,11 +589,11 @@ func (s *Service) DisconnectAll() {
 			s.statuses[item.ID] = StatusStopping
 		}
 	}
-	profiles := cloneProfiles(s.profiles)
-	s.mu.Unlock()
 	if s.runtime != nil {
 		s.runtime.StopAll()
 	}
+	profiles := cloneProfiles(s.profiles)
+	s.mu.Unlock()
 	for _, item := range profiles {
 		s.notify(Change{ProfileID: item.ID})
 	}

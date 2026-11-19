@@ -1283,13 +1283,9 @@ func (p *process) close() {
 	listener := p.listener
 	node := p.node
 	forwardConns := p.forwardConns
-	forwards := p.localForwards
 	p.mu.Unlock()
 
 	cancel()
-	if forwards != nil {
-		forwards.Close()
-	}
 	if listener != nil {
 		_ = listener.Close()
 	}
@@ -1302,6 +1298,12 @@ func (p *process) close() {
 }
 
 func (r *Runner) removeProcess(profileID string, proc *process) {
+	proc.mu.Lock()
+	forwards := proc.localForwards
+	proc.mu.Unlock()
+	if forwards != nil {
+		forwards.Close()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.procs[profileID] == proc {

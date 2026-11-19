@@ -16,7 +16,6 @@ func (s *Set) bindTCP(ctx context.Context, e *entry) (func(), error) {
 	}
 	e.closer = func() { _ = listener.Close() }
 	return func() {
-		defer close(e.done)
 		var conns sync.WaitGroup
 		defer conns.Wait()
 		for {

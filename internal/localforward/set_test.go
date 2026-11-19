@@ -349,3 +349,35 @@ func TestUDPSessionsAreCapped(t *testing.T) {
 		t.Fatalf("open target sockets = %d, cap %d", n, maxUDPSessions)
 	}
 }
+
+func TestCancelReleasesListenersWithoutClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	dialing := make(chan struct{})
+	set := New(ctx, Dialer{TCP: func(ctx context.Context, _ string) (net.Conn, error) {
+		close(dialing)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}, socksconn.Timeouts{}, nil)
+	listen := freeAddr(t)
+	set.Apply([]profile.LocalForward{tcpRule(listen, "127.0.0.1:1")})
+	client, err := dialTCP(t, listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	<-dialing
+	cancel()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		l, err := listenTCP(t, listen)
+		if err == nil {
+			_ = l.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("listen port still bound after the set context was canceled")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	set.Close()
+}

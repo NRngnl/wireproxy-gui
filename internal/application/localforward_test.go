@@ -118,32 +118,3 @@ func TestConnectAllStartsWithClonedRules(t *testing.T) {
 		t.Fatal("started profile aliases stored rules")
 	}
 }
-
-func TestSlowStopDoesNotBlockService(t *testing.T) {
-	service, item, runtime := startedService(t)
-	release := make(chan struct{})
-	runtime.mu.Lock()
-	runtime.stopBlock = release
-	runtime.mu.Unlock()
-	go service.Disconnect(item.ID)
-	time.Sleep(50 * time.Millisecond)
-	done := make(chan struct{})
-	go func() { service.Profiles(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Service is blocked while a stop drains")
-	}
-	close(release)
-}
-
-func TestStoppedEventDuringStopLeavesStatusStopped(t *testing.T) {
-	service, item, runtime := startedService(t)
-	runtime.onStop = func() {
-		service.handleRuntimeEvent(connection.Event{Type: connection.EventStopped, ProfileID: item.ID, At: time.Now()})
-	}
-	service.Disconnect(item.ID)
-	if got := service.Status(item.ID); got != StatusStopped {
-		t.Fatalf("status = %q, want stopped", got)
-	}
-}

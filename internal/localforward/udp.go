@@ -23,7 +23,6 @@ func (s *Set) bindUDP(ctx context.Context, e *entry) (func(), error) {
 	}
 	e.closer = func() { _ = packetConn.Close() }
 	return func() {
-		defer close(e.done)
 		s.serveUDP(ctx, e, packetConn)
 	}, nil
 }

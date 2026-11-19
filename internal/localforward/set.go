@@ -40,7 +40,6 @@ type entry struct {
 	dialErr string
 	cancel  context.CancelFunc
 	closer  func()
-	done    chan struct{}
 }
 
 // Set reconciles listeners against a rule list and tracks per-rule state.
@@ -51,13 +50,15 @@ type Set struct {
 	changed  func()
 
 	op      sync.Mutex
+	running sync.WaitGroup
 	mu      sync.Mutex
 	closed  bool
 	entries map[profile.LocalForwardKey]*entry
 	order   []profile.LocalForwardKey
 }
 
-// New creates a Set. Close ends every rule and is terminal; canceling ctx only stops in-flight dials.
+// New creates a Set. Canceling ctx closes every listener and session without waiting; Close also waits for
+// them and is terminal.
 // changed is called after state changes.
 func New(ctx context.Context, dial Dialer, timeouts socksconn.Timeouts, changed func()) *Set {
 	if changed == nil {
@@ -152,7 +153,8 @@ func (s *Set) States() []State {
 	return states
 }
 
-// Close stops every rule, waits for its goroutines and makes later Apply and Retry calls no-ops.
+// Close stops every rule, waits for the goroutines of current and released rules and makes later Apply and
+// Retry calls no-ops.
 func (s *Set) Close() {
 	s.op.Lock()
 	defer s.op.Unlock()
@@ -165,17 +167,18 @@ func (s *Set) Close() {
 	for _, e := range entries {
 		e.stop()
 	}
+	s.running.Wait()
 }
 
 func (s *Set) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.closed
+	return s.closed || s.ctx.Err() != nil
 }
 
 func (s *Set) start(rule profile.LocalForward) {
 	ctx, cancel := context.WithCancel(s.ctx)
-	e := &entry{rule: rule, cancel: cancel, done: make(chan struct{})}
+	e := &entry{rule: rule, cancel: cancel}
 	var run func()
 	var err error
 	if rule.Protocol == profile.PortForwardUDP {
@@ -185,17 +188,17 @@ func (s *Set) start(rule profile.LocalForward) {
 	}
 	if err != nil {
 		cancel()
-		close(e.done)
 		e.status = StatusError
 		e.err = bindMessage(err)
 	} else {
 		e.status = StatusActive
+		context.AfterFunc(ctx, e.closer)
 	}
 	s.mu.Lock()
 	s.entries[rule.Key()] = e
 	s.mu.Unlock()
 	if run != nil {
-		go run()
+		s.running.Go(run)
 	}
 }
 
@@ -239,7 +242,6 @@ func (e *entry) stop() {
 	if e.closer != nil {
 		e.closer()
 	}
-	<-e.done
 }
 
 func bindMessage(err error) string {
