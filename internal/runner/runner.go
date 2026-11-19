@@ -13,10 +13,15 @@ import (
 // Backend is the runtime-adapter contract used by the dispatcher.
 type Backend interface {
 	Events() <-chan connection.Event
+	ForwardChanges() *connection.Signal
 	Running(profileID string) bool
 	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
 	UpdateExitNode(context.Context, string, profile.TailscaleConfig) error
 	Logout(context.Context, string) error
+	ApplyLocalForwards(context.Context, string, []profile.LocalForward) error
+	RetryLocalForward(profileID string, key profile.LocalForwardKey)
+	LocalForwardStates(profileID string) []connection.LocalForwardState
+	LocalForwardTargets(profileID string) []string
 	Start(context.Context, profile.Profile) error
 	Stop(profileID string) bool
 	StopAll()
@@ -24,7 +29,8 @@ type Backend interface {
 }
 
 type Runner struct {
-	events chan connection.Event
+	events         chan connection.Event
+	forwardChanges *connection.Signal
 
 	wireguard Backend
 	tailscale Backend
@@ -35,10 +41,11 @@ type Runner struct {
 
 func New(wireguard, tailscale Backend) *Runner {
 	r := &Runner{
-		events:    make(chan connection.Event, 512),
-		wireguard: wireguard,
-		tailscale: tailscale,
-		backing:   map[string]profile.BackendKind{},
+		events:         make(chan connection.Event, 512),
+		forwardChanges: connection.NewSignal(),
+		wireguard:      wireguard,
+		tailscale:      tailscale,
+		backing:        map[string]profile.BackendKind{},
 	}
 	r.forward(profile.BackendWireGuard, wireguard)
 	r.forward(profile.BackendTailscale, tailscale)
@@ -47,6 +54,11 @@ func New(wireguard, tailscale Backend) *Runner {
 
 func (r *Runner) Events() <-chan connection.Event {
 	return r.events
+}
+
+// ForwardChanges reports profiles whose local forward state changed on either backend.
+func (r *Runner) ForwardChanges() *connection.Signal {
+	return r.forwardChanges
 }
 
 func (r *Runner) Running(profileID string) bool {
@@ -111,6 +123,35 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	return nil
 }
 
+func (r *Runner) ApplyLocalForwards(ctx context.Context, profileID string, next []profile.LocalForward) error {
+	return r.owner(profileID).ApplyLocalForwards(ctx, profileID, next)
+}
+
+func (r *Runner) RetryLocalForward(profileID string, key profile.LocalForwardKey) {
+	r.owner(profileID).RetryLocalForward(profileID, key)
+}
+
+func (r *Runner) LocalForwardStates(profileID string) []connection.LocalForwardState {
+	return r.owner(profileID).LocalForwardStates(profileID)
+}
+
+func (r *Runner) LocalForwardTargets(profileID string) []string {
+	return r.owner(profileID).LocalForwardTargets(profileID)
+}
+
+func (r *Runner) owner(profileID string) Backend {
+	r.mu.Lock()
+	kind, ok := r.backing[profileID]
+	r.mu.Unlock()
+	if ok {
+		return r.backendByKind(kind)
+	}
+	if r.tailscale.Running(profileID) {
+		return r.tailscale
+	}
+	return r.wireguard
+}
+
 func (r *Runner) Stop(profileID string) bool {
 	r.mu.Lock()
 	kind, ok := r.backing[profileID]
@@ -163,6 +204,7 @@ func (r *Runner) removeBacking(profileID string, kind profile.BackendKind) {
 }
 
 func (r *Runner) forward(kind profile.BackendKind, source Backend) {
+	source.ForwardChanges().Forward(r.forwardChanges)
 	go func() {
 		for event := range source.Events() {
 			if event.Type == connection.EventStopped || event.Type == connection.EventError {

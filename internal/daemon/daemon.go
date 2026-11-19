@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/application"
+	"github.com/NRngnl/wireproxy-gui/internal/connection"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
 )
 
@@ -25,6 +26,7 @@ type Application interface {
 	Profiles() []profile.Profile
 	Status(profileID string) application.Status
 	Logs(profileID string) []application.LogEntry
+	LocalForwardStates(profileID string) []application.LocalForwardState
 	Load() error
 }
 
@@ -83,6 +85,9 @@ func Run(ctx context.Context, core Application, loadErr error, logger *slog.Logg
 				"runtime_event", string(change.RuntimeEvent),
 				"error", errString(change.Err),
 			)
+			if change.RuntimeEvent == connection.EventLocalForwardChanged {
+				logLocalForwards(logger, core, change.ProfileID)
+			}
 		case <-hangup:
 			logger.Info("reload requested (SIGHUP)")
 			err := core.Load()
@@ -116,4 +121,16 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func logLocalForwards(logger *slog.Logger, core Application, profileID string) {
+	for _, state := range core.LocalForwardStates(profileID) {
+		logger.Info("local forward",
+			"profile_id", profileID,
+			"protocol", string(state.Key.Protocol),
+			"listen", state.Key.ListenAddr,
+			"status", string(state.Status),
+			"error", state.Err,
+		)
+	}
 }

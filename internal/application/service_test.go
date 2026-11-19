@@ -512,6 +512,25 @@ func TestShutdownStopsProfilesOnce(t *testing.T) {
 	}
 }
 
+func TestImportRejectsInvalidLocalForwardsAndAvoidsForwardPorts(t *testing.T) {
+	existing := profile.New("existing", sampleWG, 1080)
+	service, _, codec, _ := newLoadedService(t, existing)
+	bad := profile.New("bad", sampleWG, 1081)
+	bad.LocalForwards = []profile.LocalForward{{ListenAddr: "127.0.0.1:2222", TargetAddr: "pc:22"}, {ListenAddr: "127.0.0.1:2222", TargetAddr: "pc:23"}}
+	codec.decoded = []profile.Profile{bad}
+	_, err := service.Import("profiles.json", []byte("ignored"))
+	if !errors.Is(err, profile.ErrLocalForwardDuplicate) || len(service.Profiles()) != 1 {
+		t.Fatalf("import of duplicate rules: %v, %d profiles", err, len(service.Profiles()))
+	}
+	good := profile.New("good", sampleWG, 1080)
+	good.LocalForwards = []profile.LocalForward{{ListenAddr: "127.0.0.1:1081", TargetAddr: "pc:22"}}
+	codec.decoded = []profile.Profile{good}
+	got, err := service.Import("profiles.json", []byte("ignored"))
+	if err != nil || len(got[0].LocalForwards) != 1 || got[0].SocksPort == 1081 {
+		t.Fatalf("import = %v, %#v", err, got)
+	}
+}
+
 func TestPrepareImportedNeverAssignsOutOfRangePort(t *testing.T) {
 	existing := make([]profile.Profile, 0, 65535)
 	for port := 1; port <= 65535; port++ {
@@ -649,6 +668,30 @@ type fakeRuntime struct {
 	logoutCalls         []string
 	logoutErr           error
 	stopAllAndWaitCalls int
+	applyErr            error
+	appliedForwards     [][]profile.LocalForward
+	forwardStates       []connection.LocalForwardState
+	forwardChanges      *connection.Signal
+}
+
+func (r *fakeRuntime) ApplyLocalForwards(_ context.Context, _ string, next []profile.LocalForward) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.applyErr != nil {
+		return r.applyErr
+	}
+	r.appliedForwards = append(r.appliedForwards, next)
+	return nil
+}
+
+func (*fakeRuntime) LocalForwardTargets(string) []string { return nil }
+
+func (*fakeRuntime) RetryLocalForward(string, profile.LocalForwardKey) {}
+
+func (r *fakeRuntime) LocalForwardStates(string) []connection.LocalForwardState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.forwardStates
 }
 
 func newFakeRuntime() *fakeRuntime {
@@ -656,10 +699,13 @@ func newFakeRuntime() *fakeRuntime {
 		events:           make(chan connection.Event, 32),
 		running:          map[string]bool{},
 		startSetsRunning: true,
+		forwardChanges:   connection.NewSignal(),
 	}
 }
 
 func (r *fakeRuntime) Events() <-chan connection.Event { return r.events }
+
+func (r *fakeRuntime) ForwardChanges() *connection.Signal { return r.forwardChanges }
 
 func (r *fakeRuntime) Running(profileID string) bool {
 	r.mu.Lock()

@@ -29,6 +29,7 @@ type keyMap struct {
 	Help          key.Binding
 	Escape        key.Binding
 	Service       key.Binding
+	Forwards      key.Binding
 }
 
 // keys is the single instance of keyMap used throughout the TUI.
@@ -118,6 +119,10 @@ var keys = keyMap{
 		key.WithKeys("esc"),
 		key.WithHelp("esc", "back"),
 	),
+	Forwards: key.NewBinding(
+		key.WithKeys("f"),
+		key.WithHelp("f", "fwds"),
+	),
 	Service: key.NewBinding(
 		key.WithKeys("S"),
 		key.WithHelp("S", "service"),
@@ -138,7 +143,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.GoTop, k.GoBottom, k.Search, k.Tab},
 		{k.Connect, k.ConnectAll, k.Disconnect, k.DisconnectAll},
 		{k.Add, k.Edit, k.Delete, k.New},
-		{k.Login, k.Logout, k.Import, k.Export},
+		{k.Login, k.Logout, k.Import, k.Export, k.Forwards},
 		{k.Help, k.Escape, k.Quit, k.Service},
 	}
 }

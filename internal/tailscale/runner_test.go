@@ -2375,6 +2375,12 @@ func (c *fakeLocalClient) Status(context.Context) (*ipnstate.Status, error) {
 	return status, nil
 }
 
+func (c *fakeLocalClient) calls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.statusCalls
+}
+
 func (c *fakeLocalClient) lastEdit() *ipn.MaskedPrefs {
 	c.mu.Lock()
 	defer c.mu.Unlock()

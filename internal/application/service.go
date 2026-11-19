@@ -7,6 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"net"
+	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -41,10 +45,15 @@ type Codec interface {
 // Runtime is the outbound port implemented by the embedded connection backends.
 type Runtime interface {
 	Events() <-chan connection.Event
+	ForwardChanges() *connection.Signal
 	Running(profileID string) bool
 	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
 	UpdateExitNode(context.Context, string, profile.TailscaleConfig) error
 	Logout(context.Context, string) error
+	ApplyLocalForwards(context.Context, string, []profile.LocalForward) error
+	RetryLocalForward(profileID string, key profile.LocalForwardKey)
+	LocalForwardStates(profileID string) []connection.LocalForwardState
+	LocalForwardTargets(profileID string) []string
 	Start(context.Context, profile.Profile) error
 	Stop(profileID string) bool
 	StopAll()
@@ -110,6 +119,7 @@ type Service struct {
 	logs     map[string][]LogEntry
 	starts   map[string]*pendingStart
 	changes  chan Change
+	forwards sync.Mutex
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -144,14 +154,42 @@ func (s *Service) Load() error {
 	}
 
 	s.mu.Lock()
-	s.profiles = cloneProfiles(profiles)
-	s.statuses = make(map[string]Status, len(profiles))
-	s.logs = make(map[string][]LogEntry, len(profiles))
-	s.starts = map[string]*pendingStart{}
+	kept := make(map[string]bool, len(profiles))
+	statuses := make(map[string]Status, len(profiles))
+	logs := make(map[string][]LogEntry, len(profiles))
 	for _, item := range profiles {
-		s.statuses[item.ID] = StatusStopped
+		kept[item.ID] = true
+		statuses[item.ID] = StatusStopped
+		if status, ok := s.statuses[item.ID]; ok {
+			statuses[item.ID] = status
+			logs[item.ID] = s.logs[item.ID]
+		}
+	}
+	var removed, running []string
+	for id, pending := range s.starts {
+		if !kept[id] {
+			pending.cancel()
+			delete(s.starts, id)
+		}
+	}
+	for id := range s.statuses {
+		if !kept[id] {
+			removed = append(removed, id)
+		} else if s.statuses[id] == StatusRunning && s.runtime != nil && s.runtime.Running(id) {
+			running = append(running, id)
+		}
+	}
+	s.profiles = cloneProfiles(profiles)
+	s.statuses, s.logs = statuses, logs
+	if s.runtime != nil {
+		for _, id := range removed {
+			s.runtime.Stop(id)
+		}
 	}
 	s.mu.Unlock()
+	for _, id := range running {
+		_ = s.syncLocalForwards(s.ctx, id)
+	}
 	s.notify(Change{})
 	return nil
 }
@@ -173,7 +211,9 @@ func (s *Service) Profile(profileID string) (profile.Profile, bool) {
 	if index < 0 {
 		return profile.Profile{}, false
 	}
-	return s.profiles[index], true
+	item := s.profiles[index]
+	item.LocalForwards = slices.Clone(item.LocalForwards)
+	return item, true
 }
 
 func (s *Service) Status(profileID string) Status {
@@ -211,12 +251,6 @@ func (s *Service) Add(name string) (profile.Profile, error) {
 }
 
 func (s *Service) Save(updated profile.Profile) (SaveResult, error) {
-	updated.Normalize()
-	err := updated.Validate()
-	if err != nil {
-		return SaveResult{}, err
-	}
-
 	s.mu.Lock()
 	index := s.profileIndexLocked(updated.ID)
 	if index < 0 {
@@ -224,6 +258,13 @@ func (s *Service) Save(updated profile.Profile) (SaveResult, error) {
 		return SaveResult{}, ErrProfileNotFound
 	}
 	existing := s.profiles[index]
+	updated.LocalForwards = slices.Clone(existing.LocalForwards)
+	updated.Normalize()
+	err := updated.Validate()
+	if err != nil {
+		s.mu.Unlock()
+		return SaveResult{}, err
+	}
 	locked := s.runtimeLockedLocked(existing.ID)
 	if locked && profile.RuntimeConfigChanged(existing, updated) {
 		s.mu.Unlock()
@@ -313,6 +354,13 @@ func (s *Service) Import(fileName string, data []byte) ([]profile.Profile, error
 
 	s.mu.Lock()
 	imported = prepareImported(imported, s.profiles)
+	for _, item := range imported {
+		err = item.ValidateLocalForwards()
+		if err != nil {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("import %q local forwards: %w", item.Name, err)
+		}
+	}
 	next := append(cloneProfiles(s.profiles), imported...)
 	err = s.repository.Save(next)
 	if err != nil {
@@ -343,7 +391,7 @@ func (s *Service) Export(profileIDs []string) ([]byte, error) {
 				s.mu.Unlock()
 				return nil, ErrProfileNotFound
 			}
-			selected = append(selected, s.profiles[index])
+			selected = append(selected, cloneProfiles(s.profiles[index : index+1])[0])
 		}
 	}
 	s.mu.Unlock()
@@ -372,7 +420,7 @@ func (s *Service) connect(profileID string, operation Operation, checkConflict b
 		s.mu.Unlock()
 		return ErrProfileNotFound
 	}
-	item := s.profiles[index]
+	item := cloneProfiles(s.profiles[index : index+1])[0]
 	if checkConflict {
 		err := s.runningBindConflictLocked(item)
 		if err != nil {
@@ -452,7 +500,7 @@ func (s *Service) beginStartsLocked(profiles []profile.Profile, operation Operat
 			return starts, err
 		}
 		if started {
-			starts = append(starts, startRequest{ctx: ctx, profile: item, pending: pending})
+			starts = append(starts, startRequest{ctx: ctx, profile: cloneProfiles([]profile.Profile{item})[0], pending: pending})
 		}
 	}
 	return starts, nil
@@ -507,6 +555,9 @@ func (s *Service) startRuntime(ctx context.Context, item profile.Profile, pendin
 		authErr = s.markTailscaleAuthenticatedLocked(item.ID)
 	}
 	s.mu.Unlock()
+	if err == nil {
+		_ = s.syncLocalForwards(s.ctx, item.ID)
+	}
 
 	s.notify(Change{ProfileID: item.ID})
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -668,10 +719,15 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 func (s *Service) consumeRuntimeEvents() {
 	events := s.runtime.Events()
+	forwards := s.runtime.ForwardChanges()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
+		case <-forwards.Ready():
+			for _, id := range forwards.Take() {
+				s.notify(Change{ProfileID: id, RuntimeEvent: connection.EventLocalForwardChanged})
+			}
 		case event, ok := <-events:
 			if !ok {
 				return
@@ -697,8 +753,14 @@ func (s *Service) handleRuntimeEvent(event connection.Event) {
 	case connection.EventError:
 		s.statuses[event.ProfileID] = StatusError
 	}
-	s.appendLogLocked(event.ProfileID, event.At, event.Message)
+	if event.Message != "" {
+		s.appendLogLocked(event.ProfileID, event.At, event.Message)
+	}
 	s.mu.Unlock()
+	if event.Type == connection.EventStarted {
+		_ = s.syncLocalForwards(s.ctx, event.ProfileID)
+		s.notify(Change{ProfileID: event.ProfileID, RuntimeEvent: connection.EventLocalForwardChanged})
+	}
 	s.notify(Change{ProfileID: event.ProfileID, RuntimeEvent: event.Type})
 	if authErr != nil {
 		s.notify(Change{ProfileID: event.ProfileID, Operation: OperationSave, Err: authErr})
@@ -837,7 +899,7 @@ func prepareImported(imported, existing []profile.Profile) []profile.Profile {
 		imported[index].UpdatedAt = now
 
 		if imported[index].SocksPort < 1 || imported[index].SocksPort > 65535 || usedPorts[imported[index].SocksPort] {
-			port, ok := nextAvailableImportPort(usedPorts, nextPort)
+			port, ok := nextAvailableImportPort(withForwardPorts(usedPorts, imported[index]), nextPort)
 			if ok {
 				imported[index].SocksPort = port
 				nextPort = port + 1
@@ -848,6 +910,24 @@ func prepareImported(imported, existing []profile.Profile) []profile.Profile {
 		usedPorts[imported[index].SocksPort] = true
 	}
 	return imported
+}
+
+func withForwardPorts(used map[int]bool, item profile.Profile) map[int]bool {
+	if len(item.LocalForwards) == 0 {
+		return used
+	}
+	out := maps.Clone(used)
+	for _, rule := range item.LocalForwards {
+		_, port, err := net.SplitHostPort(rule.ListenAddr)
+		if err != nil {
+			continue
+		}
+		n, err := strconv.Atoi(port)
+		if err == nil && rule.Protocol == profile.PortForwardTCP {
+			out[n] = true
+		}
+	}
+	return out
 }
 
 func nextAvailableImportPort(usedPorts map[int]bool, start int) (int, bool) {
@@ -868,5 +948,9 @@ func nextAvailableImportPort(usedPorts map[int]bool, start int) (int, bool) {
 }
 
 func cloneProfiles(profiles []profile.Profile) []profile.Profile {
-	return append([]profile.Profile(nil), profiles...)
+	out := append([]profile.Profile(nil), profiles...)
+	for i := range out {
+		out[i].LocalForwards = slices.Clone(out[i].LocalForwards)
+	}
+	return out
 }

@@ -39,7 +39,7 @@ func (w *workbench) tailscaleForm(c *ui.Context, tk *theme.Tokens, sel *selected
 	w.section(c, tk, "secexit", tr("Exit node"), tr("Route traffic through another device on your tailnet."), func() {
 		w.exitNodeRow(c, tk, sz, exitLocked)
 	})
-	w.sectionInfo(c, tk, "secfwd", tr("Port forwards"), tr("Share a service on this computer or your network with your tailnet."), tr("Other tailnet devices connect to this device's tailnet IP on the listen port, and the connection is relayed to the target. Example: TCP 8080 to 127.0.0.1:3000 shares a local dev server on port 8080. Only tailnet devices can connect, and only while the profile is connected."), func() {
+	w.sectionInfo(c, tk, "secfwd", tr("Share local services to tailnet"), tr("Share a service on this computer or your network with your tailnet."), tr("Other tailnet devices connect to this device's tailnet IP on the listen port, and the connection is relayed to the target. Example: TCP 8080 to 127.0.0.1:3000 shares a local dev server on port 8080. Only tailnet devices can connect, and only while the profile is connected."), func() {
 		w.forwards(c, tk, sz, locked)
 	})
 }

@@ -79,6 +79,7 @@ type Profile struct {
 	TailscaleConfig TailscaleConfig
 	SocksHost       string
 	SocksPort       int
+	LocalForwards   []LocalForward
 	AutoStart       bool
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -133,6 +134,9 @@ func (p *Profile) Normalize() {
 	p.Name = strings.TrimSpace(p.Name)
 	p.WireGuardConfig = strings.TrimSpace(p.WireGuardConfig)
 	p.TailscaleConfig.Normalize()
+	for i := range p.LocalForwards {
+		p.LocalForwards[i].Normalize()
+	}
 	p.SocksHost = strings.TrimSpace(p.SocksHost)
 	if p.SocksHost == "" {
 		p.SocksHost = DefaultSocksHost
@@ -213,6 +217,10 @@ func (p Profile) Validate() error {
 		}
 	default:
 		errs = append(errs, ErrBackendKindInvalid)
+	}
+	err := validateLocalForwards(p)
+	if err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }
@@ -449,6 +457,7 @@ func FieldsChanged(before, after Profile) bool {
 		!tailscaleConfigEqual(before.TailscaleConfig, after.TailscaleConfig) ||
 		before.SocksHost != after.SocksHost ||
 		before.SocksPort != after.SocksPort ||
+		!localForwardsEqual(before.LocalForwards, after.LocalForwards) ||
 		before.AutoStart != after.AutoStart
 }
 

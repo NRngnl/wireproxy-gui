@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
+	"github.com/NRngnl/wireproxy-gui/internal/localforward"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
 	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 	socks5 "github.com/things-go/go-socks5"
@@ -44,7 +45,8 @@ const (
 type Event = connection.Event
 
 type Runner struct {
-	events chan Event
+	events         chan Event
+	forwardChanges *connection.Signal
 
 	parseConfig    func(profile.Profile) (*upstream.Configuration, error)
 	startWireguard func(*upstream.Configuration, int) (*upstream.VirtualTun, error)
@@ -68,11 +70,13 @@ type process struct {
 	closed   bool
 	listener net.Listener
 	tun      *upstream.VirtualTun
+	forwards *localforward.Set
 }
 
 func NewRunner() *Runner {
 	r := &Runner{
 		events:         make(chan Event, 512),
+		forwardChanges: connection.NewSignal(),
 		procs:          map[string]*process{},
 		parseConfig:    parseProfileConfig,
 		startWireguard: upstream.StartWireguard,
@@ -91,6 +95,11 @@ func NewRunner() *Runner {
 
 func (r *Runner) Events() <-chan Event {
 	return r.events
+}
+
+// ForwardChanges reports profiles whose local forward state changed.
+func (r *Runner) ForwardChanges() *connection.Signal {
+	return r.forwardChanges
 }
 
 func (r *Runner) Running(profileID string) bool {
@@ -178,6 +187,10 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	if !proc.commitStart() {
 		return context.Canceled
 	}
+	proc.startLocalForwards(procCtx, tun, r.timeouts, p.LocalForwards, func() {
+		r.forwardChanges.Mark(p.ID)
+	})
+
 	started = true
 	r.emit(EventStarted, p, "connected on "+p.BindAddress())
 
@@ -343,6 +356,14 @@ func (r boundedResolver) Resolve(reqCtx context.Context, name string) (context.C
 }
 
 func (r *Runner) removeProcess(profileID string, proc *process) {
+	proc.mu.Lock()
+	forwards := proc.forwards
+	tun := proc.tun
+	proc.mu.Unlock()
+	if forwards != nil {
+		forwards.Close()
+	}
+	closeTun(tun)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.procs[profileID] == proc {
@@ -405,14 +426,12 @@ func (p *process) close() {
 	p.closed = true
 	cancel := p.cancel
 	listener := p.listener
-	tun := p.tun
 	p.mu.Unlock()
 
 	cancel()
 	if listener != nil {
 		_ = listener.Close()
 	}
-	closeTun(tun)
 }
 
 func closeTun(tun *upstream.VirtualTun) {

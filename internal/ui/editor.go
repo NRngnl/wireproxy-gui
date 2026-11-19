@@ -58,6 +58,9 @@ func (d draft) apply(p profile.Profile) (profile.Profile, error) {
 
 func (w *workbench) syncDraft() {
 	if sel := w.frame.Selected; sel != nil && w.draft.ID != sel.Profile.ID {
+		if w.draft.ID != "" {
+			w.setForwardForm(localForwardForm{})
+		}
 		w.draft = newDraft(sel.Profile)
 		w.exitNodes, w.exitBusy, w.exitSeq, w.fwdPort, w.fwdTarget = nil, false, w.exitSeq+1, "", ""
 	}

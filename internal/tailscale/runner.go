@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
+	"github.com/NRngnl/wireproxy-gui/internal/localforward"
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
 	"github.com/NRngnl/wireproxy-gui/internal/socksconn"
 	socks5 "github.com/things-go/go-socks5"
@@ -92,7 +93,8 @@ type tailscaleAuthLogEmitter struct {
 }
 
 type Runner struct {
-	events chan Event
+	events         chan Event
+	forwardChanges *connection.Signal
 
 	stateDir string
 
@@ -160,22 +162,25 @@ type process struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	mu           sync.Mutex
-	doneOnce     sync.Once
-	closed       bool
-	listener     net.Listener
-	node         tsNode
-	forwardConns []io.Closer // TCP listeners and UDP PacketConns for active port forwards
+	mu            sync.Mutex
+	doneOnce      sync.Once
+	closed        bool
+	listener      net.Listener
+	node          tsNode
+	localForwards *localforward.Set
+	peers         *peerView
+	forwardConns  []io.Closer // TCP listeners and UDP PacketConns for active port forwards
 }
 
 func NewRunner() *Runner {
 	stateDir := defaultStateDir()
 	r := &Runner{
-		events:   make(chan Event, 512),
-		stateDir: stateDir,
-		listen:   net.Listen,
-		procs:    map[string]*process{},
-		timeouts: socksconn.Timeouts{}.WithDefaults(),
+		events:         make(chan Event, 512),
+		forwardChanges: connection.NewSignal(),
+		stateDir:       stateDir,
+		listen:         net.Listen,
+		procs:          map[string]*process{},
+		timeouts:       socksconn.Timeouts{}.WithDefaults(),
 	}
 	r.newNode = newTSNetNode
 	r.serveSocks5 = r.runSocks5
@@ -192,6 +197,11 @@ func defaultStateDir() string {
 
 func (r *Runner) Events() <-chan Event {
 	return r.events
+}
+
+// ForwardChanges reports profiles whose local forward state changed.
+func (r *Runner) ForwardChanges() *connection.Signal {
+	return r.forwardChanges
 }
 
 func (r *Runner) Running(profileID string) bool {
@@ -291,7 +301,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 			return
 		}
 		proc.close()
-		if node != nil {
+		if node != nil && proc.getNode() != node {
 			_ = node.Close()
 		}
 		r.removeProcess(p.ID, proc)
@@ -339,7 +349,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 
 	err = configureExitNode(procCtx, node, p.TailscaleConfig, status)
 	if err != nil {
-		return fmt.Errorf("configure Tailscale exit node: %w", err)
+		return fmt.Errorf("configure Tailscale preferences: %w", err)
 	}
 
 	if !proc.setNode(node) {
@@ -357,6 +367,10 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	if err != nil {
 		return err
 	}
+
+	proc.startLocalForwards(procCtx, runningNode, r.timeouts, p.LocalForwards, func() {
+		r.forwardChanges.Mark(p.ID)
+	})
 
 	started = true
 	r.emit(EventStarted, p, "connected on "+p.BindAddress())
@@ -662,6 +676,7 @@ func configureExitNode(ctx context.Context, node tsNode, cfg profile.TailscaleCo
 	prefs.ClearExitNode()
 	prefs.AutoExitNode = ""
 	prefs.ExitNodeAllowLANAccess = cfg.ExitNodeAllowLANAccess
+	prefs.RouteAll = true
 
 	exitNode := strings.TrimSpace(cfg.ExitNode)
 	if cfg.AutoExitNode {
@@ -690,6 +705,7 @@ func configureExitNode(ctx context.Context, node tsNode, cfg profile.TailscaleCo
 		ExitNodeIPSet:             true,
 		AutoExitNodeSet:           true,
 		ExitNodeAllowLANAccessSet: true,
+		RouteAllSet:               true,
 	})
 	return err
 }
@@ -1002,50 +1018,15 @@ func (r *Runner) relayTCPForward(ctx context.Context, _ tsNode, listener net.Lis
 }
 
 func relayTCPConn(ctx context.Context, conn net.Conn, targetAddr string, timeouts socksconn.Timeouts) {
-	defer conn.Close()
 	dialCtx, cancel := socksconn.DialContext(ctx, ctx, timeouts.Dial)
 	var dialer net.Dialer
 	target, err := dialer.DialContext(dialCtx, "tcp", targetAddr)
 	cancel()
 	if err != nil {
+		_ = conn.Close()
 		return
 	}
-	defer target.Close()
-
-	wrappedConn := socksconn.WrapTCP(conn, timeouts.TCPIdle, timeouts.Drain)
-	wrappedTarget := socksconn.WrapTCP(target, timeouts.TCPIdle, timeouts.Drain)
-
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = wrappedConn.Close()
-			_ = wrappedTarget.Close()
-		case <-done:
-		}
-	}()
-
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		_, _ = io.Copy(wrappedTarget, wrappedConn)
-		closeWriteOrClose(wrappedTarget, target)
-	})
-	wg.Go(func() {
-		_, _ = io.Copy(wrappedConn, wrappedTarget)
-		closeWriteOrClose(wrappedConn, conn)
-	})
-	wg.Wait()
-	close(done)
-}
-
-func closeWriteOrClose(wrapped, raw net.Conn) {
-	if _, ok := raw.(interface{ CloseWrite() error }); ok {
-		if cw, ok := wrapped.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-			return
-		}
-	}
-	_ = wrapped.Close()
+	socksconn.RelayTCP(ctx, conn, target, timeouts)
 }
 
 func (r *Runner) relayUDPForward(ctx context.Context, _ tsNode, packetConn net.PacketConn, rule profile.PortForward, profileID, profileName string) {
@@ -1307,7 +1288,6 @@ func (p *process) close() {
 	p.closed = true
 	cancel := p.cancel
 	listener := p.listener
-	node := p.node
 	forwardConns := p.forwardConns
 	p.mu.Unlock()
 
@@ -1315,15 +1295,26 @@ func (p *process) close() {
 	if listener != nil {
 		_ = listener.Close()
 	}
-	if node != nil {
-		_ = node.Close()
-	}
 	for _, c := range forwardConns {
 		_ = c.Close()
 	}
 }
 
 func (r *Runner) removeProcess(profileID string, proc *process) {
+	proc.mu.Lock()
+	forwards := proc.localForwards
+	peers := proc.peers
+	node := proc.node
+	proc.mu.Unlock()
+	if forwards != nil {
+		forwards.Close()
+	}
+	if peers != nil {
+		peers.wait()
+	}
+	if node != nil {
+		_ = node.Close()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.procs[profileID] == proc {

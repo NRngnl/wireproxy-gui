@@ -95,6 +95,7 @@ func (w *workbench) detail(c *ui.Context, tk *theme.Tokens, narrow bool) {
 					feedback.Alert(c, w.info, feedback.AlertProps{Type: feedback.Success, Closed: &w.infoShut})
 				}
 				w.form(c, tk, sel.Locked)
+				w.localForwards(c, tk, sel)
 				w.activity(c, tk, sel)
 			})
 		})

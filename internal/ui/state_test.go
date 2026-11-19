@@ -51,3 +51,18 @@ func TestAuthenticationClearsConsumedAuthKey(t *testing.T) {
 		t.Fatalf("saved = %#v, err = %v", saved.TailscaleConfig, err)
 	}
 }
+
+func TestStaleForwardSaveDoesNotTouchReopenedForm(t *testing.T) {
+	w := &workbench{}
+	w.selectedID.Store("a")
+	w.setForwardForm(localForwardForm{Open: true, Busy: true})
+	seq := w.lfSeq
+	w.setForwardForm(localForwardForm{})
+	edit := localForwardForm{}
+	edit.load(profile.LocalForward{Protocol: profile.PortForwardTCP, ListenAddr: "127.0.0.1:2222", TargetAddr: "pc:22"})
+	w.setForwardForm(edit)
+	w.applyForwardSaved("a", seq, nil)
+	if !w.lf.Open || w.lf.Editing == nil {
+		t.Fatal("stale save result closed the reopened edit form")
+	}
+}

@@ -30,6 +30,12 @@ type Application interface {
 	DisconnectFromTray(string) bool
 	DisconnectAll()
 	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
+	AddLocalForward(context.Context, string, profile.LocalForward) error
+	UpdateLocalForward(context.Context, string, profile.LocalForwardKey, profile.LocalForward) error
+	RemoveLocalForward(context.Context, string, profile.LocalForwardKey) error
+	RetryLocalForward(context.Context, string, profile.LocalForwardKey) error
+	LocalForwardStates(string) []application.LocalForwardState
+	LocalForwardTargets(string) []string
 	Logout(context.Context, string) error
 	Shutdown(context.Context) error
 }

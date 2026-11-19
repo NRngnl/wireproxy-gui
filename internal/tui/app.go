@@ -44,6 +44,11 @@ type Application interface {
 	DisconnectAll()
 	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
 	Logout(context.Context, string) error
+	AddLocalForward(context.Context, string, profile.LocalForward) error
+	UpdateLocalForward(context.Context, string, profile.LocalForwardKey, profile.LocalForward) error
+	RemoveLocalForward(context.Context, string, profile.LocalForwardKey) error
+	RetryLocalForward(context.Context, string, profile.LocalForwardKey) error
+	LocalForwardStates(string) []application.LocalForwardState
 	Shutdown(context.Context) error
 }
 

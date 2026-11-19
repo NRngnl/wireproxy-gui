@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/application"
@@ -15,6 +16,7 @@ import (
 )
 
 var errPreview = errors.New("preview has no network backend")
+var errPreviewDuplicate = errors.New("a forward with this protocol and listen address already exists")
 
 const previewConfig = "[Interface]\nAddress = 10.2.0.2/32\nPrivateKey = preview\n\n[Peer]\nPublicKey = preview\nAllowedIPs = 0.0.0.0/0\n"
 
@@ -23,10 +25,13 @@ type fixture struct {
 	statuses map[string]application.Status
 	logs     map[string][]application.LogEntry
 	changes  chan application.Change
+	states   map[string][]application.LocalForwardState
+
+	manyTargets bool
 }
 
 func newFixture(name string) *fixture {
-	f := &fixture{statuses: map[string]application.Status{}, logs: map[string][]application.LogEntry{}, changes: make(chan application.Change, 8)}
+	f := &fixture{statuses: map[string]application.Status{}, logs: map[string][]application.LogEntry{}, changes: make(chan application.Change, 8), states: map[string][]application.LocalForwardState{}}
 	if name == "empty" {
 		return f
 	}
@@ -37,6 +42,9 @@ func newFixture(name string) *fixture {
 	f.statuses[home.ID] = application.StatusRunning
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	f.logs[home.ID] = []application.LogEntry{{At: now, Message: "connected on 127.0.0.1:1080"}}
+	if strings.HasPrefix(name, "lf-") {
+		f.localForwardScenario(name, &home, &ts)
+	}
 	switch name {
 	case "ts", "ts-authed", "ts-running":
 		ts.TailscaleConfig.Hostname = "travel-node"

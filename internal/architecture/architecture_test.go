@@ -18,20 +18,21 @@ const modulePath = "github.com/NRngnl/wireproxy-gui"
 func TestInternalDependenciesPointInward(t *testing.T) {
 	root := repositoryRoot(t)
 	rules := map[string][]string{
-		"application": {"connection", "profile"},
-		"buildinfo":   {},
-		"connection":  {},
-		"daemon":      {"application", "buildinfo", "connection", "profile"},
-		"lock":        {},
-		"profile":     {},
-		"profilejson": {"application", "profile"},
-		"runner":      {"connection", "profile"},
-		"svcinstall":  {"lock", "profilejson", "profile"},
-		"socksconn":   {},
-		"tailscale":   {"connection", "profile", "socksconn"},
-		"tui":         {"application", "buildinfo", "connection", "profile", "tui/screens", "svcinstall"},
-		"ui":          {"application", "buildinfo", "connection", "profile", "svcinstall"},
-		"wireproxy":   {"connection", "profile", "socksconn"},
+		"application":  {"connection", "profile"},
+		"buildinfo":    {},
+		"connection":   {"profile"},
+		"daemon":       {"application", "buildinfo", "connection", "profile"},
+		"localforward": {"connection", "profile", "socksconn"},
+		"lock":         {},
+		"profile":      {},
+		"profilejson":  {"application", "profile"},
+		"runner":       {"connection", "profile"},
+		"svcinstall":   {"lock", "profilejson", "profile"},
+		"socksconn":    {},
+		"tailscale":    {"connection", "localforward", "profile", "socksconn"},
+		"tui":          {"application", "buildinfo", "connection", "profile", "tui/screens", "svcinstall"},
+		"ui":           {"application", "buildinfo", "connection", "profile", "svcinstall"},
+		"wireproxy":    {"connection", "localforward", "profile", "socksconn"},
 	}
 
 	for packageName, allowed := range rules {

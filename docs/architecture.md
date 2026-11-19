@@ -29,8 +29,15 @@ cmd/wireproxy-gui is the composition root that supplies every adapter.
   owns the persistence DTOs, maps them to domain entities, handles filesystem
   permissions and serialization, and contains no UI logic. The domain model is
   therefore independent of the JSON schema.
+- `internal/localforward` owns host listeners (TCP and UDP) for local forwards,
+  per-rule state, and the reconcile that binds, closes and retries rules. It
+  relays through a backend-supplied dial callback and depends only on
+  `profile`, `connection` and `socksconn`. `internal/socksconn` also holds the
+  shared TCP relay and timeouts.
 - `internal/wireproxy`, `internal/tailscale`, and `internal/runner` are runtime
-  adapters. They translate domain profiles into concrete embedded backends;
+  adapters. They translate domain profiles into concrete embedded backends,
+  supply the userspace dial callbacks for local forwards (tsnet netstack and
+  WireGuard netstack, never the host network);
   the composition root injects those backends into the dispatcher.
 - `internal/ui` is the inbound Fyne adapter. It owns widgets, selection,
   localization, dialogs, tray presentation, and form-to-domain mapping. It

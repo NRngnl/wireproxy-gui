@@ -27,10 +27,11 @@ type profileRow struct {
 }
 
 type selectedProfile struct {
-	Profile profile.Profile
-	Status  application.Status
-	Locked  bool
-	Logs    []application.LogEntry
+	Profile  profile.Profile
+	Status   application.Status
+	Locked   bool
+	Logs     []application.LogEntry
+	Forwards []application.LocalForwardState
 }
 
 type presentationFrame struct {
@@ -43,6 +44,7 @@ type workbench struct {
 	core       Application
 	window     *mygo.Window
 	selectedID atomic.Value
+	lfSeq      int
 	wake       chan struct{}
 	frame      presentationFrame
 	notice     string
@@ -61,6 +63,7 @@ type workbench struct {
 	fwdProto   int
 	fwdPort    string
 	fwdTarget  string
+	lf         localForwardForm
 	info       string
 	infoShut   bool
 	confirmDel bool
@@ -114,10 +117,11 @@ func readFrame(core Application, selectedID string) presentationFrame {
 	}
 	if chosen != nil {
 		frame.Selected = &selectedProfile{
-			Profile: *chosen,
-			Status:  core.Status(chosen.ID),
-			Locked:  core.RuntimeLocked(chosen.ID),
-			Logs:    core.Logs(chosen.ID),
+			Profile:  *chosen,
+			Status:   core.Status(chosen.ID),
+			Locked:   core.RuntimeLocked(chosen.ID),
+			Logs:     core.Logs(chosen.ID),
+			Forwards: core.LocalForwardStates(chosen.ID),
 		}
 	}
 	return frame

@@ -21,6 +21,12 @@ interactive GUI or terminal session is available.
   the reload and of auto-connect), so a partial failure in one step
   (e.g. a malformed store file) does not silently mask success or failure
   of the other.
+- Applies each connected profile's local forwards (`local_forwards` in the
+  store). A rule that cannot bind is reported as a rule state and does not fail
+  the profile. Local forwards are edited live only by the process that owns the
+  connection; the daemon uses edits made elsewhere after it reloads the store
+  and the profile reconnects, or after a restart. It logs each rule's state
+  change.
 - Logs one line per profile state change (`log/slog`) to stdout by
   default, or to a file via `--log-file`. Pass `--json-logs` to emit JSON
   lines instead of plain text, which is convenient for log aggregation.
