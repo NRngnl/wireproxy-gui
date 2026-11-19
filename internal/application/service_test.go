@@ -512,6 +512,25 @@ func TestShutdownStopsProfilesOnce(t *testing.T) {
 	}
 }
 
+func TestImportRejectsInvalidLocalForwardsAndAvoidsForwardPorts(t *testing.T) {
+	existing := profile.New("existing", sampleWG, 1080)
+	service, _, codec, _ := newLoadedService(t, existing)
+	bad := profile.New("bad", sampleWG, 1081)
+	bad.LocalForwards = []profile.LocalForward{{ListenAddr: "127.0.0.1:2222", TargetAddr: "pc:22"}, {ListenAddr: "127.0.0.1:2222", TargetAddr: "pc:23"}}
+	codec.decoded = []profile.Profile{bad}
+	_, err := service.Import("profiles.json", []byte("ignored"))
+	if !errors.Is(err, profile.ErrLocalForwardDuplicate) || len(service.Profiles()) != 1 {
+		t.Fatalf("import of duplicate rules: %v, %d profiles", err, len(service.Profiles()))
+	}
+	good := profile.New("good", sampleWG, 1080)
+	good.LocalForwards = []profile.LocalForward{{ListenAddr: "127.0.0.1:1081", TargetAddr: "pc:22"}}
+	codec.decoded = []profile.Profile{good}
+	got, err := service.Import("profiles.json", []byte("ignored"))
+	if err != nil || len(got[0].LocalForwards) != 1 || got[0].SocksPort == 1081 {
+		t.Fatalf("import = %v, %#v", err, got)
+	}
+}
+
 func TestPrepareImportedNeverAssignsOutOfRangePort(t *testing.T) {
 	existing := make([]profile.Profile, 0, 65535)
 	for port := 1; port <= 65535; port++ {

@@ -122,23 +122,9 @@ func validListenAddr(addr string) bool {
 	return err == nil && ip.Zone() == "" && !ip.Is4In6() && !ip.IsMulticast() && ip != netip.AddrFrom4([4]byte{255, 255, 255, 255})
 }
 
-// SanitizeLocalForwards drops rules that fail validation, duplicate an earlier key or clash with the SOCKS5 bind,
-// and returns the number dropped. Call after Normalize on data that did not come through Validate.
-func (p *Profile) SanitizeLocalForwards() int {
-	kept := make([]LocalForward, 0, len(p.LocalForwards))
-	seen := map[LocalForwardKey]bool{}
-	for _, rule := range p.LocalForwards {
-		if rule.Validate() != nil || seen[rule.Key()] || (rule.Protocol == PortForwardTCP && listenClashesSocks(rule.ListenAddr, *p)) {
-			continue
-		}
-		seen[rule.Key()] = true
-		kept = append(kept, rule)
-	}
-	dropped := len(p.LocalForwards) - len(kept)
-	if dropped > 0 {
-		p.LocalForwards = kept
-	}
-	return dropped
+// ValidateLocalForwards reports every invalid, duplicate or SOCKS5-clashing local forward of p.
+func (p Profile) ValidateLocalForwards() error {
+	return validateLocalForwards(p)
 }
 
 func validateLocalForwards(p Profile) error {

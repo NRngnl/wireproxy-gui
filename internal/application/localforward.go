@@ -142,6 +142,10 @@ func (s *Service) syncLocalForwards(ctx context.Context, profileID string) error
 	if !running {
 		return nil
 	}
+	err := item.ValidateLocalForwards()
+	if err != nil {
+		return err
+	}
 	return s.runtime.ApplyLocalForwards(ctx, profileID, item.LocalForwards)
 }
 

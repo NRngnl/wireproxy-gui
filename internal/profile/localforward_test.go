@@ -1,6 +1,9 @@
 package profile
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestLocalForwardNormalizeValidate(t *testing.T) {
 	base := New("n", "[Interface]\nAddress=10.0.0.2/32\nPrivateKey=k\n[Peer]\nPublicKey=p\n", 1080)
@@ -34,7 +37,7 @@ func TestLocalForwardNormalizeValidate(t *testing.T) {
 	}
 }
 
-func TestLocalForwardCanonicalAndSanitize(t *testing.T) {
+func TestLocalForwardCanonicalAndValidate(t *testing.T) {
 	p := New("n", "x", 1080)
 	p.LocalForwards = []LocalForward{
 		{ListenAddr: "[::ffff:127.0.0.1]:002222", TargetAddr: "PC:0022"},
@@ -48,7 +51,8 @@ func TestLocalForwardCanonicalAndSanitize(t *testing.T) {
 	if got := p.LocalForwards[0]; got.ListenAddr != "127.0.0.1:2222" || got.TargetAddr != "PC:22" {
 		t.Fatalf("canonical = %#v", got)
 	}
-	if dropped := p.SanitizeLocalForwards(); dropped != 5 || len(p.LocalForwards) != 1 {
-		t.Fatalf("dropped %d, kept %#v", dropped, p.LocalForwards)
+	err := p.ValidateLocalForwards()
+	if !errors.Is(err, ErrLocalForwardDuplicate) || !errors.Is(err, ErrLocalForwardSocksClash) {
+		t.Fatalf("ValidateLocalForwards() = %v", err)
 	}
 }

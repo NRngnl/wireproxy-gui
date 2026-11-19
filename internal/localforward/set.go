@@ -74,7 +74,7 @@ func New(ctx context.Context, dial Dialer, timeouts socksconn.Timeouts, changed 
 }
 
 // Apply releases removed or retargeted rules, then binds new ones, leaving unchanged rules and their
-// sessions alone. A failed bind is recorded as that rule's state, never returned. It does nothing after Close.
+// sessions alone. Rule keys must be unique, as profile validation guarantees. A failed bind is recorded as that rule's state, never returned. It does nothing after Close.
 func (s *Set) Apply(next []profile.LocalForward) {
 	s.op.Lock()
 	defer s.op.Unlock()
@@ -84,9 +84,6 @@ func (s *Set) Apply(next []profile.LocalForward) {
 	wanted := make(map[profile.LocalForwardKey]profile.LocalForward, len(next))
 	order := make([]profile.LocalForwardKey, 0, len(next))
 	for _, rule := range next {
-		if _, dup := wanted[rule.Key()]; dup {
-			continue
-		}
 		wanted[rule.Key()] = rule
 		order = append(order, rule.Key())
 	}

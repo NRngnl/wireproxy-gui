@@ -7,7 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"net"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -148,7 +151,6 @@ func (s *Service) Load() error {
 	}
 	for i := range profiles {
 		profiles[i].Normalize()
-		profiles[i].SanitizeLocalForwards()
 	}
 
 	s.mu.Lock()
@@ -331,12 +333,15 @@ func (s *Service) Import(fileName string, data []byte) ([]profile.Profile, error
 		return nil, err
 	}
 
-	declared := make([]int, len(imported))
-	for i := range imported {
-		declared[i] = len(imported[i].LocalForwards)
-	}
 	s.mu.Lock()
 	imported = prepareImported(imported, s.profiles)
+	for _, item := range imported {
+		err = item.ValidateLocalForwards()
+		if err != nil {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("import %q local forwards: %w", item.Name, err)
+		}
+	}
 	next := append(cloneProfiles(s.profiles), imported...)
 	err = s.repository.Save(next)
 	if err != nil {
@@ -347,9 +352,6 @@ func (s *Service) Import(fileName string, data []byte) ([]profile.Profile, error
 	for _, item := range imported {
 		s.statuses[item.ID] = StatusStopped
 		s.appendLogLocked(item.ID, time.Now(), "imported profile")
-		if dropped := declared[slices.IndexFunc(imported, func(o profile.Profile) bool { return o.ID == item.ID })] - len(item.LocalForwards); dropped > 0 {
-			s.appendLogLocked(item.ID, time.Now(), fmt.Sprintf("dropped %d invalid local forwards on import", dropped))
-		}
 	}
 	s.mu.Unlock()
 	for _, item := range imported {
@@ -875,7 +877,7 @@ func prepareImported(imported, existing []profile.Profile) []profile.Profile {
 		imported[index].UpdatedAt = now
 
 		if imported[index].SocksPort < 1 || imported[index].SocksPort > 65535 || usedPorts[imported[index].SocksPort] {
-			port, ok := nextAvailableImportPort(usedPorts, nextPort)
+			port, ok := nextAvailableImportPort(withForwardPorts(usedPorts, imported[index]), nextPort)
 			if ok {
 				imported[index].SocksPort = port
 				nextPort = port + 1
@@ -884,9 +886,26 @@ func prepareImported(imported, existing []profile.Profile) []profile.Profile {
 			}
 		}
 		usedPorts[imported[index].SocksPort] = true
-		imported[index].SanitizeLocalForwards()
 	}
 	return imported
+}
+
+func withForwardPorts(used map[int]bool, item profile.Profile) map[int]bool {
+	if len(item.LocalForwards) == 0 {
+		return used
+	}
+	out := maps.Clone(used)
+	for _, rule := range item.LocalForwards {
+		_, port, err := net.SplitHostPort(rule.ListenAddr)
+		if err != nil {
+			continue
+		}
+		n, err := strconv.Atoi(port)
+		if err == nil && rule.Protocol == profile.PortForwardTCP {
+			out[n] = true
+		}
+	}
+	return out
 }
 
 func nextAvailableImportPort(usedPorts map[int]bool, start int) (int, bool) {
