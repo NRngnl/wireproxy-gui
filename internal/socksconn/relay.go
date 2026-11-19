@@ -10,12 +10,12 @@ import (
 // RelayTCP copies bytes both ways between client and target with idle and drain bounds,
 // half-closing where supported, and closes both connections when it returns.
 func RelayTCP(ctx context.Context, client, target net.Conn, timeouts Timeouts) {
-	defer client.Close()
-	defer target.Close()
 	timeouts = timeouts.WithDefaults()
 
 	wrappedClient := WrapTCP(client, timeouts.TCPIdle, timeouts.Drain)
 	wrappedTarget := WrapTCP(target, timeouts.TCPIdle, timeouts.Drain)
+	defer wrappedClient.Close()
+	defer wrappedTarget.Close()
 
 	done := make(chan struct{})
 	defer close(done)

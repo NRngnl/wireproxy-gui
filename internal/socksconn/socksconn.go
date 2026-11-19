@@ -70,6 +70,7 @@ type idleDeadline struct {
 	mu            sync.Mutex
 	timeout       time.Duration
 	halfClosed    bool
+	closed        bool
 	lastActivity  time.Time
 	readDeadline  time.Time
 	writeDeadline time.Time
@@ -79,7 +80,7 @@ type idleDeadline struct {
 func (d *idleDeadline) beforeRead(conn net.Conn, now time.Time) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.halfClosed || d.timeout <= 0 {
+	if d.closed || d.halfClosed || d.timeout <= 0 {
 		return nil
 	}
 	if d.lastActivity.IsZero() {
@@ -116,7 +117,7 @@ func (d *idleDeadline) readDeadlineSnapshot() time.Time {
 func (d *idleDeadline) retryReadDeadline(conn net.Conn, now time.Time) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.halfClosed || d.timeout <= 0 || d.lastActivity.IsZero() {
+	if d.closed || d.halfClosed || d.timeout <= 0 || d.lastActivity.IsZero() {
 		return false, nil
 	}
 	target := d.lastActivity.Add(d.timeout)
@@ -135,7 +136,7 @@ func (d *idleDeadline) retryReadDeadline(conn net.Conn, now time.Time) (bool, er
 func (d *idleDeadline) beforeWrite(conn net.Conn, now time.Time) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.timeout <= 0 {
+	if d.closed || d.timeout <= 0 {
 		return nil
 	}
 	if d.halfClosed {
@@ -169,7 +170,7 @@ func (d *idleDeadline) beforeWrite(conn net.Conn, now time.Time) error {
 func (d *idleDeadline) afterWrite(conn net.Conn, now time.Time) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.halfClosed || d.timeout <= 0 {
+	if d.closed || d.halfClosed || d.timeout <= 0 {
 		return nil
 	}
 	if now.After(d.lastActivity) {
@@ -191,7 +192,7 @@ func (d *idleDeadline) afterWrite(conn net.Conn, now time.Time) error {
 func (d *idleDeadline) retryWriteDeadline(conn net.Conn, start, now time.Time) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.halfClosed || d.timeout <= 0 {
+	if d.closed || d.halfClosed || d.timeout <= 0 {
 		return false, nil
 	}
 	target := start.Add(d.timeout)
@@ -210,7 +211,7 @@ func (d *idleDeadline) retryWriteDeadline(conn net.Conn, start, now time.Time) (
 func (d *idleDeadline) enterDrain(conn net.Conn, drainTimeout time.Duration, now time.Time) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.halfClosed {
+	if d.closed || d.halfClosed {
 		return nil
 	}
 	d.halfClosed = true
@@ -249,6 +250,13 @@ func (d *idleDeadline) clear(conn net.Conn) error {
 	d.writeDeadline = time.Time{}
 	d.drainDeadline = time.Time{}
 	return conn.SetDeadline(time.Time{})
+}
+
+func (d *idleDeadline) close(conn net.Conn) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
+	_ = conn.SetDeadline(time.Time{})
 }
 
 func readWithIdle(conn net.Conn, idle *idleDeadline, b []byte) (int, error) {
@@ -348,7 +356,7 @@ func (c *Conn) Write(b []byte) (int, error) {
 
 // Close closes the underlying connection and runs any listener tracking cleanup once.
 func (c *Conn) Close() error {
-	_ = c.idle.clear(c.Conn)
+	c.idle.close(c.Conn)
 	c.closeOnce.Do(func() {
 		if c.onClose != nil {
 			c.onClose()
@@ -449,6 +457,12 @@ func normalizeUDPIdleTimeout(err error) error {
 		return err
 	}
 	return idleTimeoutError{err: err}
+}
+
+// Close stops the idle deadline for good and closes the underlying connection.
+func (c *UDPConn) Close() error {
+	c.idle.close(c.Conn)
+	return c.Conn.Close()
 }
 
 // Write writes to the underlying connection and refreshes the idle deadline.
