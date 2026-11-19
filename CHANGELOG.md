@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/NRngnl/wireproxy-gui/compare/v0.4.2...v0.5.0) (2026-11-19)
+
+
+### Features
+
+* **forward:** add local port forwards through the embedded backend ([#35](https://github.com/NRngnl/wireproxy-gui/issues/35)) ([14403be](https://github.com/NRngnl/wireproxy-gui/commit/14403be6a433a0a55cf586baeded9f3ddb2e4304))
+
 ## [0.4.2](https://github.com/NRngnl/wireproxy-gui/compare/v0.4.1...v0.4.2) (2026-11-18)
 
 
