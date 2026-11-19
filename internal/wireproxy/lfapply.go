@@ -19,13 +19,20 @@ var errNamedTargetNeedsDNS = errors.New("local forward target is a name but the 
 func tunDialer(tun *upstream.VirtualTun) localforward.Dialer {
 	dial := func(network string) func(context.Context, string) (net.Conn, error) {
 		return func(ctx context.Context, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
+			host, port, err := net.SplitHostPort(addr)
 			if err != nil {
 				return nil, err
 			}
 			_, parseErr := netip.ParseAddr(host)
-			if parseErr != nil && tun.SystemDNS {
-				return nil, errNamedTargetNeedsDNS
+			if parseErr != nil {
+				if tun.SystemDNS {
+					return nil, errNamedTargetNeedsDNS
+				}
+				ip, err := lookupTunnel(ctx, tun.Tnet, tun.Conf.DNS, host)
+				if err != nil {
+					return nil, err
+				}
+				addr = net.JoinHostPort(ip.String(), port)
 			}
 			return tun.Tnet.DialContext(ctx, network, addr)
 		}
