@@ -154,17 +154,36 @@ func (s *Service) Load() error {
 	}
 
 	s.mu.Lock()
-	previous := s.statuses
-	s.profiles = cloneProfiles(profiles)
-	s.statuses = make(map[string]Status, len(profiles))
-	s.logs = make(map[string][]LogEntry, len(profiles))
-	s.starts = map[string]*pendingStart{}
-	var running []string
+	kept := make(map[string]bool, len(profiles))
+	statuses := make(map[string]Status, len(profiles))
+	logs := make(map[string][]LogEntry, len(profiles))
 	for _, item := range profiles {
-		s.statuses[item.ID] = StatusStopped
-		if previous[item.ID] == StatusRunning && s.runtime != nil && s.runtime.Running(item.ID) {
-			s.statuses[item.ID] = StatusRunning
-			running = append(running, item.ID)
+		kept[item.ID] = true
+		statuses[item.ID] = StatusStopped
+		if status, ok := s.statuses[item.ID]; ok {
+			statuses[item.ID] = status
+			logs[item.ID] = s.logs[item.ID]
+		}
+	}
+	var removed, running []string
+	for id, pending := range s.starts {
+		if !kept[id] {
+			pending.cancel()
+			delete(s.starts, id)
+		}
+	}
+	for id := range s.statuses {
+		if !kept[id] {
+			removed = append(removed, id)
+		} else if s.statuses[id] == StatusRunning && s.runtime != nil && s.runtime.Running(id) {
+			running = append(running, id)
+		}
+	}
+	s.profiles = cloneProfiles(profiles)
+	s.statuses, s.logs = statuses, logs
+	if s.runtime != nil {
+		for _, id := range removed {
+			s.runtime.Stop(id)
 		}
 	}
 	s.mu.Unlock()
@@ -536,6 +555,9 @@ func (s *Service) startRuntime(ctx context.Context, item profile.Profile, pendin
 		authErr = s.markTailscaleAuthenticatedLocked(item.ID)
 	}
 	s.mu.Unlock()
+	if err == nil {
+		_ = s.syncLocalForwards(s.ctx, item.ID)
+	}
 
 	s.notify(Change{ProfileID: item.ID})
 	if err != nil && !errors.Is(err, context.Canceled) {

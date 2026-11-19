@@ -1,6 +1,7 @@
 package application
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -116,5 +117,48 @@ func TestConnectAllStartsWithClonedRules(t *testing.T) {
 	got, _ := service.Profile(item.ID)
 	if got.LocalForwards[0].TargetAddr != "pc:22" {
 		t.Fatal("started profile aliases stored rules")
+	}
+}
+
+func TestReloadStopsRemovedProfilesAndKeepsInFlightStatus(t *testing.T) {
+	kept := profile.NewTailscale("kept", 1081)
+	service, item, runtime := startedService(t)
+	repository := service.repository.(*fakeRepository)
+	repository.mu.Lock()
+	repository.profiles = append(repository.profiles, kept)
+	repository.mu.Unlock()
+	err := service.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.mu.Lock()
+	service.statuses[kept.ID] = StatusStarting
+	service.mu.Unlock()
+	repository.mu.Lock()
+	repository.profiles = []profile.Profile{kept}
+	repository.mu.Unlock()
+	err = service.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.mu.Lock()
+	stops := slices.Clone(runtime.stopCalls)
+	runtime.mu.Unlock()
+	if !slices.Contains(stops, item.ID) {
+		t.Fatalf("removed running profile was not stopped: %v", stops)
+	}
+	if got := service.Status(kept.ID); got != StatusStarting {
+		t.Fatalf("starting profile reset to %q", got)
+	}
+}
+
+func TestEditWhileForwardsAreNotReadySavesWithoutError(t *testing.T) {
+	service, item, runtime := startedService(t)
+	runtime.mu.Lock()
+	runtime.applyErr = connection.ErrNotRunning
+	runtime.mu.Unlock()
+	err := service.AddLocalForward(t.Context(), item.ID, profile.LocalForward{ListenAddr: "127.0.0.1:2222", TargetAddr: "pc:22"})
+	if err != nil {
+		t.Fatalf("saved edit reported %v", err)
 	}
 }

@@ -135,7 +135,7 @@ func (s *Service) syncLocalForwards(ctx context.Context, profileID string) error
 	defer s.forwards.Unlock()
 	s.mu.Lock()
 	item, ok := s.profileLocked(profileID)
-	running := ok && s.statusLocked(profileID) == StatusRunning
+	running := ok && s.statuses[profileID] == StatusRunning && s.runtime.Running(profileID)
 	s.mu.Unlock()
 	if !running {
 		return nil
@@ -144,7 +144,11 @@ func (s *Service) syncLocalForwards(ctx context.Context, profileID string) error
 	if err != nil {
 		return err
 	}
-	return s.runtime.ApplyLocalForwards(ctx, profileID, item.LocalForwards)
+	err = s.runtime.ApplyLocalForwards(ctx, profileID, item.LocalForwards)
+	if errors.Is(err, connection.ErrNotRunning) {
+		return nil
+	}
+	return err
 }
 
 func (s *Service) profileLocked(profileID string) (profile.Profile, bool) {
