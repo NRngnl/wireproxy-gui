@@ -15,7 +15,7 @@ var replyBuffers = sync.Pool{New: func() any {
 }}
 
 type udpSession struct {
-	conn net.Conn
+	conn udpSessionConn
 }
 
 func (s *Set) bindUDP(ctx context.Context, e *entry) (func(), error) {
@@ -60,7 +60,7 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 		}
 	}
 
-	open := func(key string, source net.Addr, sess *udpSession, first []byte) {
+	dialAndSend := func(key string, sess *udpSession, first []byte) udpSessionConn {
 		dialCtx, cancel := socksconn.DialContext(ctx, ctx, s.timeouts.Dial)
 		raw, err := s.dial.UDP(dialCtx, e.rule.TargetAddr)
 		cancel()
@@ -69,9 +69,9 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 				s.dialFailed(e, err)
 			}
 			retire(key, sess)
-			return
+			return nil
 		}
-		conn := socksconn.WrapUDP(raw, s.timeouts.UDPIdle)
+		conn := wrapUDPSession(raw, s.timeouts.UDPIdle)
 		_, werr := conn.Write(first)
 		if werr != nil {
 			_ = conn.Close()
@@ -79,7 +79,7 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 				s.dialFailed(e, werr)
 			}
 			retire(key, sess)
-			return
+			return nil
 		}
 		s.dialSucceeded(e)
 		mu.Lock()
@@ -88,26 +88,31 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 		mu.Unlock()
 		if stale {
 			_ = conn.Close()
+			return nil
+		}
+		return conn
+	}
+
+	open := func(key string, source net.Addr, sess *udpSession, first []byte) {
+		conn := dialAndSend(key, sess, first)
+		if conn == nil {
 			return
 		}
-		bufPtr := replyBuffers.Get().(*[]byte)
-		defer replyBuffers.Put(bufPtr)
-		buf := *bufPtr
-		for {
-			n, rerr := conn.Read(buf)
-			if rerr != nil {
-				retire(key, sess)
-				return
-			}
-			_, _ = packetConn.WriteTo(buf[:n], source)
-		}
+		_ = conn.readLoop(func(reply []byte) {
+			_, _ = packetConn.WriteTo(reply, source)
+		})
+		retire(key, sess)
 	}
 
 	start := func(key string, source net.Addr, first []byte) {
 		sess := &udpSession{}
 		sessions[key] = sess
 		payload := append([]byte(nil), first...)
-		wg.Go(func() { open(key, source, sess, payload) })
+		wg.Go(func() {
+			initial := payload
+			payload = nil
+			open(key, source, sess, initial)
+		})
 	}
 
 	buf := make([]byte, socksconn.UDPBufferSize)
