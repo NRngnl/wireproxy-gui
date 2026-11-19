@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
@@ -48,11 +49,12 @@ func (f *fakeInstaller) Uninstall(context.Context) error {
 // wires a real internal/application.Service so model tests stay isolated
 // from runtime and persistence behavior.
 type fakeApplication struct {
-	changes  chan application.Change
-	profiles []profile.Profile
-	statuses map[string]application.Status
-	logs     map[string][]application.LogEntry
-	locked   map[string]bool
+	changes      chan application.Change
+	profiles     []profile.Profile
+	addedForward *profile.LocalForward
+	statuses     map[string]application.Status
+	logs         map[string][]application.LogEntry
+	locked       map[string]bool
 
 	connectCalls       []string
 	disconnectCalls    []string
@@ -181,7 +183,8 @@ func (f *fakeApplication) DisconnectAll() {
 func (f *fakeApplication) ExitNodes(context.Context, string) ([]connection.ExitNode, error) {
 	return nil, nil
 }
-func (f *fakeApplication) AddLocalForward(context.Context, string, profile.LocalForward) error {
+func (f *fakeApplication) AddLocalForward(_ context.Context, _ string, rule profile.LocalForward) error {
+	f.addedForward = &rule
 	return nil
 }
 
@@ -839,4 +842,53 @@ func TestForwardsKeyOpensAndEscClosesLocalForwards(t *testing.T) {
 	if updated.(*model).mode != modeList {
 		t.Fatal("esc did not return to the list")
 	}
+}
+
+func TestForwardFormAdvancesFieldsAndSubmits(t *testing.T) {
+	item := newTestProfile("alpha", 1080)
+	app := newFakeApplication(item)
+	var m tea.Model = newModel(app, nil)
+	send := func(msg tea.Msg) {
+		queue := []tea.Msg{msg}
+		for steps := 0; len(queue) > 0 && steps < 1000; steps++ {
+			var cmd tea.Cmd
+			m, cmd = m.Update(queue[0])
+			queue = append(queue[1:], drain(cmd)...)
+		}
+	}
+	send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	send(tea.KeyMsg{Type: tea.KeyEnter})
+	send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2222")})
+	send(tea.KeyMsg{Type: tea.KeyEnter})
+	send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("pc:22")})
+	send(tea.KeyMsg{Type: tea.KeyEnter})
+	if app.addedForward == nil || app.addedForward.TargetAddr != "pc:22" {
+		t.Fatalf("form did not submit: %+v", app.addedForward)
+	}
+}
+
+func drain(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	var msg tea.Msg
+	select {
+	case msg = <-result:
+	case <-time.After(50 * time.Millisecond):
+		return nil
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range batch {
+			out = append(out, drain(c)...)
+		}
+		return out
+	}
+	if msg == nil {
+		return nil
+	}
+	return []tea.Msg{msg}
 }

@@ -14,6 +14,7 @@ func (m *model) openForwards() (tea.Model, tea.Cmd) {
 	if m.list.selectedID == "" {
 		return m, nil
 	}
+	m.forwardGen++
 	m.forwards = screens.NewLocalForwardsPanel(m.list.selectedID)
 	m.mode = modeForwards
 	m.refreshForwards()
@@ -35,8 +36,12 @@ func (m *model) refreshForwards() {
 }
 
 func (m *model) updateForwards(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	action, cmd := m.forwards.HandleKey(msg)
+	return m.runForwardAction(action, cmd)
+}
+
+func (m *model) runForwardAction(action screens.LocalForwardsAction, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	panel := m.forwards
-	action, cmd := panel.HandleKey(msg)
 	if action == screens.LocalForwardsNone {
 		return m, cmd
 	}
@@ -45,6 +50,8 @@ func (m *model) updateForwards(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	panel.Busy = true
+	m.forwardGen++
+	gen := m.forwardGen
 	id, rule, editing := panel.ProfileID, panel.Rule(), panel.Editing()
 	selected, hasSelected := panel.Selected()
 	core := m.core
@@ -65,18 +72,19 @@ func (m *model) updateForwards(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				err = core.RetryLocalForward(ctx, id, selected.Key())
 			}
 		}
-		return forwardResultMsg{profileID: id, action: action, err: err}
+		return forwardResultMsg{profileID: id, gen: gen, action: action, err: err}
 	}
 }
 
 type forwardResultMsg struct {
 	profileID string
+	gen       int
 	action    screens.LocalForwardsAction
 	err       error
 }
 
 func (m *model) applyForwardResult(msg forwardResultMsg) tea.Cmd {
-	if m.mode != modeForwards || m.forwards == nil || m.forwards.ProfileID != msg.profileID {
+	if m.mode != modeForwards || m.forwards == nil || m.forwards.ProfileID != msg.profileID || msg.gen != m.forwardGen {
 		return nil
 	}
 	m.forwards.Busy = false

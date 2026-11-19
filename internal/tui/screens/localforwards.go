@@ -102,6 +102,14 @@ func (p *LocalForwardsPanel) buildForm() {
 	))
 }
 
+// HandleMsg routes a non-key message, such as a form's field-advance command result, to the open form.
+func (p *LocalForwardsPanel) HandleMsg(msg tea.Msg) (LocalForwardsAction, tea.Cmd) {
+	if p.Busy || p.form == nil {
+		return LocalForwardsNone, nil
+	}
+	return p.updateForm(msg)
+}
+
 // HandleKey routes a key press and reports the action for the owner to perform.
 func (p *LocalForwardsPanel) HandleKey(msg tea.KeyMsg) (LocalForwardsAction, tea.Cmd) {
 	if p.Busy {
@@ -130,7 +138,7 @@ func (p *LocalForwardsPanel) handleListKey(msg tea.KeyMsg) (LocalForwardsAction,
 	case "up", "k":
 		p.cursor = max(0, p.cursor-1)
 	case "down", "j":
-		p.cursor = min(len(p.Rules)-1, p.cursor+1)
+		p.cursor = max(0, min(len(p.Rules)-1, p.cursor+1))
 	case "a":
 		return LocalForwardsNone, p.OpenForm(false)
 	case "e":
@@ -157,33 +165,36 @@ func (p *LocalForwardsPanel) handleFormKey(msg tea.KeyMsg) (LocalForwardsAction,
 		p.form = nil
 		return LocalForwardsNone, nil
 	}
+	return p.updateForm(msg)
+}
+
+func (p *LocalForwardsPanel) updateForm(msg tea.Msg) (LocalForwardsAction, tea.Cmd) {
 	model, cmd := p.form.Update(msg)
 	if form, ok := model.(*huh.Form); ok {
 		p.form = form
 	}
 	switch p.form.State {
 	case huh.StateCompleted:
-		return p.submit(), nil
+		return p.submit()
 	case huh.StateAborted:
 		p.form = nil
 	}
 	return LocalForwardsNone, cmd
 }
 
-func (p *LocalForwardsPanel) submit() LocalForwardsAction {
+func (p *LocalForwardsPanel) submit() (LocalForwardsAction, tea.Cmd) {
 	rule := p.Rule()
 	err := rule.Validate()
 	if err != nil {
 		p.Err = err.Error()
 		p.listen, p.target = rule.ListenAddr, rule.TargetAddr
-		p.buildForm()
-		return LocalForwardsNone
+		return LocalForwardsNone, p.ReopenForm()
 	}
 	p.Err = ""
 	if p.editing != nil {
-		return LocalForwardsUpdate
+		return LocalForwardsUpdate, nil
 	}
-	return LocalForwardsAdd
+	return LocalForwardsAdd, nil
 }
 
 // ReopenForm rebuilds the add/edit form with the user's input after a failed save.

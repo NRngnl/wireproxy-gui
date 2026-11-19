@@ -101,6 +101,7 @@ type model struct {
 	// async result arrives can never misapply a stale result to the new
 	// panel instance.
 	serviceGen int
+	forwardGen int
 
 	width  int
 	height int
@@ -422,6 +423,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.mode == modeForwards && m.forwards != nil {
+		return m.runForwardAction(m.forwards.HandleMsg(msg))
+	}
 	return m, nil
 }
 
