@@ -43,11 +43,10 @@ type Event = connection.Event
 type EventType = connection.EventType
 
 const (
-	EventLog                 = connection.EventLog
-	EventStarted             = connection.EventStarted
-	EventStopped             = connection.EventStopped
-	EventError               = connection.EventError
-	EventLocalForwardChanged = connection.EventLocalForwardChanged
+	EventLog     = connection.EventLog
+	EventStarted = connection.EventStarted
+	EventStopped = connection.EventStopped
+	EventError   = connection.EventError
 )
 
 const (
@@ -94,7 +93,8 @@ type tailscaleAuthLogEmitter struct {
 }
 
 type Runner struct {
-	events chan Event
+	events         chan Event
+	forwardChanges *connection.Signal
 
 	stateDir string
 
@@ -174,11 +174,12 @@ type process struct {
 func NewRunner() *Runner {
 	stateDir := defaultStateDir()
 	r := &Runner{
-		events:   make(chan Event, 512),
-		stateDir: stateDir,
-		listen:   net.Listen,
-		procs:    map[string]*process{},
-		timeouts: socksconn.Timeouts{}.WithDefaults(),
+		events:         make(chan Event, 512),
+		forwardChanges: connection.NewSignal(),
+		stateDir:       stateDir,
+		listen:         net.Listen,
+		procs:          map[string]*process{},
+		timeouts:       socksconn.Timeouts{}.WithDefaults(),
 	}
 	r.newNode = newTSNetNode
 	r.serveSocks5 = r.runSocks5
@@ -195,6 +196,11 @@ func defaultStateDir() string {
 
 func (r *Runner) Events() <-chan Event {
 	return r.events
+}
+
+// ForwardChanges reports profiles whose local forward state changed.
+func (r *Runner) ForwardChanges() *connection.Signal {
+	return r.forwardChanges
 }
 
 func (r *Runner) Running(profileID string) bool {
@@ -362,7 +368,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 	}
 
 	proc.startLocalForwards(procCtx, runningNode, r.timeouts, p.LocalForwards, func() {
-		r.emit(EventLocalForwardChanged, p, "")
+		r.forwardChanges.Mark(p.ID)
 	})
 
 	started = true
@@ -1313,7 +1319,7 @@ func (r *Runner) removeProcess(profileID string, proc *process) {
 }
 
 func (r *Runner) emit(eventType EventType, p profile.Profile, message string) {
-	if strings.TrimSpace(message) == "" && eventType != EventLocalForwardChanged {
+	if strings.TrimSpace(message) == "" {
 		return
 	}
 	event := connection.Event{
@@ -1322,9 +1328,6 @@ func (r *Runner) emit(eventType EventType, p profile.Profile, message string) {
 		ProfileName: p.Name,
 		Message:     message,
 		At:          time.Now(),
-	}
-	if eventType == EventLocalForwardChanged && len(r.events) > cap(r.events)/2 {
-		return
 	}
 	select {
 	case r.events <- event:

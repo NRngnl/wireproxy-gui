@@ -70,7 +70,7 @@ func TestFailedSaveDoesNotApplyAndRuleErrorKeepsProfileRunning(t *testing.T) {
 	if _, after := lastApplied(runtime); after != before {
 		t.Fatal("rejected edit reached the runtime")
 	}
-	service.handleRuntimeEvent(connection.Event{Type: connection.EventLocalForwardChanged, ProfileID: item.ID})
+	runtime.forwardChanges.Mark(item.ID)
 	if status := service.Status(item.ID); status != StatusRunning {
 		t.Fatalf("status = %q after rule event", status)
 	}

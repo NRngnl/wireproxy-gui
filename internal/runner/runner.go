@@ -13,6 +13,7 @@ import (
 // Backend is the runtime-adapter contract used by the dispatcher.
 type Backend interface {
 	Events() <-chan connection.Event
+	ForwardChanges() *connection.Signal
 	Running(profileID string) bool
 	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
 	UpdateExitNode(context.Context, string, profile.TailscaleConfig) error
@@ -28,7 +29,8 @@ type Backend interface {
 }
 
 type Runner struct {
-	events chan connection.Event
+	events         chan connection.Event
+	forwardChanges *connection.Signal
 
 	wireguard Backend
 	tailscale Backend
@@ -39,10 +41,11 @@ type Runner struct {
 
 func New(wireguard, tailscale Backend) *Runner {
 	r := &Runner{
-		events:    make(chan connection.Event, 512),
-		wireguard: wireguard,
-		tailscale: tailscale,
-		backing:   map[string]profile.BackendKind{},
+		events:         make(chan connection.Event, 512),
+		forwardChanges: connection.NewSignal(),
+		wireguard:      wireguard,
+		tailscale:      tailscale,
+		backing:        map[string]profile.BackendKind{},
 	}
 	r.forward(profile.BackendWireGuard, wireguard)
 	r.forward(profile.BackendTailscale, tailscale)
@@ -51,6 +54,11 @@ func New(wireguard, tailscale Backend) *Runner {
 
 func (r *Runner) Events() <-chan connection.Event {
 	return r.events
+}
+
+// ForwardChanges reports profiles whose local forward state changed on either backend.
+func (r *Runner) ForwardChanges() *connection.Signal {
+	return r.forwardChanges
 }
 
 func (r *Runner) Running(profileID string) bool {
@@ -196,6 +204,14 @@ func (r *Runner) removeBacking(profileID string, kind profile.BackendKind) {
 }
 
 func (r *Runner) forward(kind profile.BackendKind, source Backend) {
+	changes := source.ForwardChanges()
+	go func() {
+		for range changes.Ready() {
+			for _, id := range changes.Take() {
+				r.forwardChanges.Mark(id)
+			}
+		}
+	}()
 	go func() {
 		for event := range source.Events() {
 			if event.Type == connection.EventStopped || event.Type == connection.EventError {

@@ -36,17 +36,17 @@ const defaultPersistentKeepalive = 25
 type EventType = connection.EventType
 
 const (
-	EventLog                 = connection.EventLog
-	EventStarted             = connection.EventStarted
-	EventStopped             = connection.EventStopped
-	EventError               = connection.EventError
-	EventLocalForwardChanged = connection.EventLocalForwardChanged
+	EventLog     = connection.EventLog
+	EventStarted = connection.EventStarted
+	EventStopped = connection.EventStopped
+	EventError   = connection.EventError
 )
 
 type Event = connection.Event
 
 type Runner struct {
-	events chan Event
+	events         chan Event
+	forwardChanges *connection.Signal
 
 	parseConfig    func(profile.Profile) (*upstream.Configuration, error)
 	startWireguard func(*upstream.Configuration, int) (*upstream.VirtualTun, error)
@@ -76,6 +76,7 @@ type process struct {
 func NewRunner() *Runner {
 	r := &Runner{
 		events:         make(chan Event, 512),
+		forwardChanges: connection.NewSignal(),
 		procs:          map[string]*process{},
 		parseConfig:    parseProfileConfig,
 		startWireguard: upstream.StartWireguard,
@@ -94,6 +95,11 @@ func NewRunner() *Runner {
 
 func (r *Runner) Events() <-chan Event {
 	return r.events
+}
+
+// ForwardChanges reports profiles whose local forward state changed.
+func (r *Runner) ForwardChanges() *connection.Signal {
+	return r.forwardChanges
 }
 
 func (r *Runner) Running(profileID string) bool {
@@ -182,7 +188,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 		return context.Canceled
 	}
 	proc.startLocalForwards(procCtx, tun, r.timeouts, p.LocalForwards, func() {
-		r.emit(EventLocalForwardChanged, p, "")
+		r.forwardChanges.Mark(p.ID)
 	})
 
 	started = true
@@ -610,9 +616,6 @@ func (r *Runner) emit(eventType EventType, p profile.Profile, message string) {
 		ProfileName: p.Name,
 		Message:     message,
 		At:          time.Now(),
-	}
-	if eventType == EventLocalForwardChanged && len(r.events) > cap(r.events)/2 {
-		return
 	}
 	select {
 	case r.events <- event:

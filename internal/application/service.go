@@ -42,6 +42,7 @@ type Codec interface {
 // Runtime is the outbound port implemented by the embedded connection backends.
 type Runtime interface {
 	Events() <-chan connection.Event
+	ForwardChanges() *connection.Signal
 	Running(profileID string) bool
 	ExitNodes(context.Context, string) ([]connection.ExitNode, error)
 	UpdateExitNode(context.Context, string, profile.TailscaleConfig) error
@@ -694,10 +695,15 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 func (s *Service) consumeRuntimeEvents() {
 	events := s.runtime.Events()
+	forwards := s.runtime.ForwardChanges()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
+		case <-forwards.Ready():
+			for _, id := range forwards.Take() {
+				s.notify(Change{ProfileID: id, RuntimeEvent: connection.EventLocalForwardChanged})
+			}
 		case event, ok := <-events:
 			if !ok {
 				return

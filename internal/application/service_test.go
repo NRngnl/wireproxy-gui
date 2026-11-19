@@ -651,6 +651,7 @@ type fakeRuntime struct {
 	stopAllAndWaitCalls int
 	appliedForwards     [][]profile.LocalForward
 	forwardStates       []connection.LocalForwardState
+	forwardChanges      *connection.Signal
 }
 
 func (r *fakeRuntime) ApplyLocalForwards(_ context.Context, _ string, next []profile.LocalForward) error {
@@ -675,10 +676,13 @@ func newFakeRuntime() *fakeRuntime {
 		events:           make(chan connection.Event, 32),
 		running:          map[string]bool{},
 		startSetsRunning: true,
+		forwardChanges:   connection.NewSignal(),
 	}
 }
 
 func (r *fakeRuntime) Events() <-chan connection.Event { return r.events }
+
+func (r *fakeRuntime) ForwardChanges() *connection.Signal { return r.forwardChanges }
 
 func (r *fakeRuntime) Running(profileID string) bool {
 	r.mu.Lock()

@@ -208,14 +208,18 @@ type testBackend struct {
 	running               map[string]bool
 	startEvent            connection.Event
 	startBlock            <-chan struct{}
+	forwardChanges        *connection.Signal
 }
 
 func newTestBackend() *testBackend {
 	return &testBackend{
-		events:  make(chan connection.Event, 16),
-		running: map[string]bool{},
+		events:         make(chan connection.Event, 16),
+		running:        map[string]bool{},
+		forwardChanges: connection.NewSignal(),
 	}
 }
+
+func (b *testBackend) ForwardChanges() *connection.Signal { return b.forwardChanges }
 
 func (b *testBackend) Events() <-chan connection.Event {
 	return b.events
@@ -287,4 +291,29 @@ func (b *testBackend) StopAll() {
 func (b *testBackend) StopAllAndWait(context.Context) error {
 	b.StopAll()
 	return nil
+}
+
+func TestForwardChurnDoesNotDropStoppedEvent(t *testing.T) {
+	wireguard := newTestBackend()
+	r := New(wireguard, newTestBackend())
+	for range 10 * cap(r.events) {
+		wireguard.forwardChanges.Mark("wg")
+	}
+	wireguard.events <- connection.Event{Type: connection.EventStopped, ProfileID: "wg"}
+	select {
+	case event := <-r.Events():
+		if event.Type != connection.EventStopped {
+			t.Fatalf("event = %q", event.Type)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stopped event was lost behind forward changes")
+	}
+	select {
+	case <-r.ForwardChanges().Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("forward change was not delivered")
+	}
+	if ids := r.ForwardChanges().Take(); len(ids) != 1 || ids[0] != "wg" {
+		t.Fatalf("forward changes = %v", ids)
+	}
 }
