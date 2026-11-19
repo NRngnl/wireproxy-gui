@@ -12,21 +12,21 @@ func (w *workbench) localForwardForm(c *ui.Context, tk *theme.Tokens, sel *selec
 	sz, f := w.size(), &w.lf
 	if !f.Fetched {
 		f.Fetched = true
+		f.Listens = listenOptions()
 		id := sel.Profile.ID
-		w.lfSeq++
 		seq := w.lfSeq
 		go func() {
-			names := w.core.LocalForwardTargets(id)
+			opts := targetOptions(w.core.LocalForwardTargets(id))
 			w.window.Update(func() {
 				if seq == w.lfSeq && w.selectedProfileID() == id {
-					w.lf.Targets = names
+					w.lf.Targets = opts
 				}
 			})
 		}()
 	}
 	box := ui.Column(c).Gap(12).Padding(12).Radius(tk.BorderRadius).Border(1, tk.BorderSecondary)
 	if box.Shortcut(0, ui.KeyEscape) {
-		w.lf = localForwardForm{}
+		w.setForwardForm(localForwardForm{})
 		return
 	}
 	box.Children(func() {
@@ -36,7 +36,7 @@ func (w *workbench) localForwardForm(c *ui.Context, tk *theme.Tokens, sel *selec
 		w.field(c, tk, tr("Listen on"), "", func() {
 			ui.Row(c).Gap(8).Wrap().Children(func() {
 				ui.Column(c).Grow(1).Basis(220).Children(func() {
-					field.Select(c.Key("lflisten"), &f.Listen, field.SelectProps{Size: sz, Options: listenOptions()})
+					field.Select(c.Key("lflisten"), &f.Listen, field.SelectProps{Size: sz, Options: f.Listens})
 				})
 				ui.Column(c).Width(110).Children(func() {
 					field.Input(c.Key("lfport"), &f.Port, field.InputProps{Size: sz, Placeholder: tr("Port")})
@@ -50,7 +50,7 @@ func (w *workbench) localForwardForm(c *ui.Context, tk *theme.Tokens, sel *selec
 			feedback.Alert(c, tr("Anyone who can reach this computer can use this forward."), feedback.AlertProps{Type: feedback.Warning})
 		}
 		w.field(c, tk, tr("Target"), tr("A device name or IP on the network behind this profile, then the port."), func() {
-			field.AutoComplete(c.Key("lftarget"), &f.Target, field.AutoCompleteProps{Size: sz, Placeholder: tr("host:port, e.g. remote-pc:22"), Options: targetOptions(f.Targets)})
+			field.AutoComplete(c.Key("lftarget"), &f.Target, field.AutoCompleteProps{Size: sz, Placeholder: tr("host:port, e.g. remote-pc:22"), Options: f.Targets})
 		})
 		if f.Err != "" {
 			ui.Text(c, tr(f.Err)).FontSize(tk.FontSizeSM).TextColor(tk.Error)
@@ -64,10 +64,15 @@ func (w *workbench) localForwardForm(c *ui.Context, tk *theme.Tokens, sel *selec
 				w.submitForward(sel.Profile.ID)
 			}
 			if action.Button(c.Key("lfcancel"), tr("Cancel"), action.ButtonProps{Size: sz}).Clicked() {
-				w.lf = localForwardForm{}
+				w.setForwardForm(localForwardForm{})
 			}
 		})
 	})
+}
+
+func (w *workbench) setForwardForm(next localForwardForm) {
+	w.lfSeq++
+	w.lf = next
 }
 
 func listenOptions() []field.SelectOption {

@@ -35,7 +35,7 @@ func (w *workbench) localForwards(c *ui.Context, tk *theme.Tokens, sel *selected
 		if w.lf.Open {
 			w.localForwardForm(c, tk, sel)
 		} else if action.Button(c.Key("lfadd"), tr("Add local forward"), action.ButtonProps{Size: sz}).AlignSelf(ui.Start).Clicked() {
-			w.lf = localForwardForm{Open: true, Listen: listenLoopback4}
+			w.setForwardForm(localForwardForm{Open: true, Listen: listenLoopback4})
 		}
 	})
 	w.localForwardRemoveModal(c, sel)
@@ -148,7 +148,9 @@ func (w *workbench) localForwardActions(c *ui.Context, sel *selectedProfile, id 
 		w.info, w.infoShut = tr("Copied {{.Address}}", map[string]any{"Address": r.ListenAddr}), false
 	}
 	if action.ActionIcon(c.Key("lfedit"+id), lucide.Pencil(), action.ActionIconProps{Size: theme.Small, Title: tr("Edit")}).Clicked() {
-		w.lf.load(r)
+		next := localForwardForm{}
+		next.load(r)
+		w.setForwardForm(next)
 	}
 	if action.ActionIcon(c.Key("lfrm"+id), lucide.Trash2(), action.ActionIconProps{Size: theme.Small, Danger: true, Title: tr("Remove")}).Clicked() {
 		key := r.Key()

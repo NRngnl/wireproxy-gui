@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/NRngnl/wireproxy-gui/internal/profile"
+	"github.com/lobehub/lobe-mygo/pkg/field"
 )
 
 const (
@@ -28,7 +29,8 @@ type localForwardForm struct {
 	Remove   *profile.LocalForwardKey
 	Removing bool
 	Busy     bool
-	Targets  []string
+	Targets  []field.AutoCompleteOption
+	Listens  []field.SelectOption
 	Fetched  bool
 }
 
@@ -72,7 +74,12 @@ func (f *localForwardForm) rule() (profile.LocalForward, string) {
 	if f.Proto == 1 {
 		proto = profile.PortForwardUDP
 	}
-	return profile.LocalForward{Protocol: proto, ListenAddr: net.JoinHostPort(ip.String(), strconv.Itoa(port)), TargetAddr: target}, ""
+	rule := profile.LocalForward{Protocol: proto, ListenAddr: net.JoinHostPort(ip.String(), strconv.Itoa(port)), TargetAddr: target}
+	rule.Normalize()
+	if rule.Validate() != nil {
+		return profile.LocalForward{}, "Enter a valid IP address, such as 192.0.2.10"
+	}
+	return rule, ""
 }
 
 func (f *localForwardForm) load(r profile.LocalForward) {

@@ -30,7 +30,6 @@ func (w *workbench) submitForward(profileID string) {
 		return
 	}
 	w.lf.Err, w.lf.Busy = "", true
-	w.lfSeq++
 	seq := w.lfSeq
 	go func() {
 		var err error
@@ -39,18 +38,20 @@ func (w *workbench) submitForward(profileID string) {
 		} else {
 			err = w.core.AddLocalForward(w.ctx(), profileID, rule)
 		}
-		w.window.Update(func() {
-			if seq != w.lfSeq || w.selectedProfileID() != profileID {
-				return
-			}
-			w.lf.Busy = false
-			if err != nil {
-				w.lf.Err = displayErrorText("Local forward", err)
-				return
-			}
-			w.lf = localForwardForm{}
-		})
+		w.window.Update(func() { w.applyForwardSaved(profileID, seq, err) })
 	}()
+}
+
+func (w *workbench) applyForwardSaved(profileID string, seq int, err error) {
+	if seq != w.lfSeq || w.selectedProfileID() != profileID {
+		return
+	}
+	w.lf.Busy = false
+	if err != nil {
+		w.lf.Err = displayErrorText("Local forward", err)
+		return
+	}
+	w.setForwardForm(localForwardForm{})
 }
 
 func (w *workbench) selectedProfileID() string {
