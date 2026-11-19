@@ -358,10 +358,12 @@ func (r boundedResolver) Resolve(reqCtx context.Context, name string) (context.C
 func (r *Runner) removeProcess(profileID string, proc *process) {
 	proc.mu.Lock()
 	forwards := proc.forwards
+	tun := proc.tun
 	proc.mu.Unlock()
 	if forwards != nil {
 		forwards.Close()
 	}
+	closeTun(tun)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.procs[profileID] == proc {
@@ -424,14 +426,12 @@ func (p *process) close() {
 	p.closed = true
 	cancel := p.cancel
 	listener := p.listener
-	tun := p.tun
 	p.mu.Unlock()
 
 	cancel()
 	if listener != nil {
 		_ = listener.Close()
 	}
-	closeTun(tun)
 }
 
 func closeTun(tun *upstream.VirtualTun) {

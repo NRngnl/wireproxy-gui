@@ -301,7 +301,7 @@ func (r *Runner) Start(ctx context.Context, p profile.Profile) error {
 			return
 		}
 		proc.close()
-		if node != nil {
+		if node != nil && proc.getNode() != node {
 			_ = node.Close()
 		}
 		r.removeProcess(p.ID, proc)
@@ -1288,16 +1288,12 @@ func (p *process) close() {
 	p.closed = true
 	cancel := p.cancel
 	listener := p.listener
-	node := p.node
 	forwardConns := p.forwardConns
 	p.mu.Unlock()
 
 	cancel()
 	if listener != nil {
 		_ = listener.Close()
-	}
-	if node != nil {
-		_ = node.Close()
 	}
 	for _, c := range forwardConns {
 		_ = c.Close()
@@ -1308,12 +1304,16 @@ func (r *Runner) removeProcess(profileID string, proc *process) {
 	proc.mu.Lock()
 	forwards := proc.localForwards
 	peers := proc.peers
+	node := proc.node
 	proc.mu.Unlock()
 	if forwards != nil {
 		forwards.Close()
 	}
 	if peers != nil {
 		peers.wait()
+	}
+	if node != nil {
+		_ = node.Close()
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
