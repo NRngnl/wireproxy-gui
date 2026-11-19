@@ -24,7 +24,15 @@ func (s *Set) bindTCP(ctx context.Context, e *entry) (func(), error) {
 				s.fail(ctx, e, err)
 				return
 			}
-			conns.Go(func() { s.relayTCP(ctx, e, conn) })
+			if !s.tcpBudget.tryAcquire() {
+				s.dialFailed(e, ErrSessionLimitReached)
+				_ = conn.Close()
+				continue
+			}
+			conns.Go(func() {
+				defer s.tcpBudget.release()
+				s.relayTCP(ctx, e, conn)
+			})
 		}
 	}, nil
 }

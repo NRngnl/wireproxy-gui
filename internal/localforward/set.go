@@ -16,6 +16,9 @@ import (
 // ErrPortInUse is the rule error when the listen address is already bound.
 var ErrPortInUse = errors.New("port in use")
 
+// ErrSessionLimitReached is the rule error when a profile's local forwards reach their derived share of the userspace port space.
+var ErrSessionLimitReached = errors.New("local forward session limit reached")
+
 // Status is the live status of one rule.
 type Status = connection.LocalForwardStatus
 
@@ -28,9 +31,11 @@ const (
 )
 
 // Dialer opens connections to a target through the backend, never through the host network.
+// EphemeralPorts optionally overrides the backend stack's ephemeral port count; zero reads gVisor's default range.
 type Dialer struct {
-	TCP func(ctx context.Context, addr string) (net.Conn, error)
-	UDP func(ctx context.Context, addr string) (net.Conn, error)
+	TCP            func(ctx context.Context, addr string) (net.Conn, error)
+	UDP            func(ctx context.Context, addr string) (net.Conn, error)
+	EphemeralPorts int
 }
 
 type entry struct {
@@ -50,6 +55,9 @@ type Set struct {
 	timeouts socksconn.Timeouts
 	changed  func()
 
+	tcpBudget slotBudget
+	udpBudget slotBudget
+
 	op      sync.Mutex
 	running sync.WaitGroup
 	mu      sync.Mutex
@@ -65,12 +73,15 @@ func New(ctx context.Context, dial Dialer, timeouts socksconn.Timeouts, changed 
 	if changed == nil {
 		changed = func() {}
 	}
+	tcpLimit, udpLimit := derivePortLimits(dial.EphemeralPorts, processFDLimit())
 	return &Set{
-		ctx:      ctx,
-		dial:     dial,
-		timeouts: timeouts.WithDefaults(),
-		changed:  changed,
-		entries:  map[profile.LocalForwardKey]*entry{},
+		ctx:       ctx,
+		dial:      dial,
+		timeouts:  timeouts.WithDefaults(),
+		changed:   changed,
+		tcpBudget: slotBudget{limit: int64(tcpLimit)},
+		udpBudget: slotBudget{limit: int64(udpLimit)},
+		entries:   map[profile.LocalForwardKey]*entry{},
 	}
 }
 

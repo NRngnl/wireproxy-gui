@@ -245,6 +245,15 @@ For example, TCP `127.0.0.1:2222` to `remote-pc:22` lets
   `e` edit, `d` remove, `r` retry, `esc` back.
 - Timeouts match SOCKS5: 30 seconds to dial, 5 minutes TCP idle, 60 seconds to
   drain a half-close and 60 seconds UDP session idle.
+- Session limits per profile protect tunnel DNS and SOCKS5 on the shared
+  userspace stack. Each profile's local forwards share separate per-protocol
+  budgets derived from gVisor's ephemeral port range (`16000` to `65535`,
+  `49,536` ports per protocol): up to half (`24,768`) for concurrent UDP
+  sessions, and up to a quarter (`12,384`, further bounded by a quarter of the
+  process file-descriptor limit on Unix) for concurrent TCP connections to
+  leave room for TCP `TIME_WAIT` and host sockets. When a budget is full, live
+  sessions stay open, new sources or connections are refused, and the rule
+  reports `"local forward session limit reached"` until a slot frees up.
 - Rules are stored as `local_forwards` in the profile JSON. Older versions
   ignore the key, so a downgrade drops the rules.
 - The daemon applies a profile's rules when it connects the profile. A profile that is

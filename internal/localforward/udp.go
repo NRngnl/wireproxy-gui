@@ -104,15 +104,20 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 		retire(key, sess)
 	}
 
-	start := func(key string, source net.Addr, first []byte) {
+	start := func(key string, source net.Addr, first []byte) bool {
+		if !s.udpBudget.tryAcquire() {
+			return false
+		}
 		sess := &udpSession{}
 		sessions[key] = sess
 		payload := append([]byte(nil), first...)
 		wg.Go(func() {
+			defer s.udpBudget.release()
 			initial := payload
 			payload = nil
 			open(key, source, sess, initial)
 		})
+		return true
 	}
 
 	buf := make([]byte, socksconn.UDPBufferSize)
@@ -126,8 +131,11 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 		mu.Lock()
 		sess, ok := sessions[key]
 		if !ok {
-			start(key, source, buf[:n])
+			admitted := start(key, source, buf[:n])
 			mu.Unlock()
+			if !admitted {
+				s.dialFailed(e, ErrSessionLimitReached)
+			}
 			continue
 		}
 		conn := sess.conn
@@ -141,11 +149,15 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 			if !errors.Is(werr, net.ErrClosed) {
 				continue
 			}
+			admitted := true
 			mu.Lock()
 			if _, ok := sessions[key]; !ok && !closing {
-				start(key, source, buf[:n])
+				admitted = start(key, source, buf[:n])
 			}
 			mu.Unlock()
+			if !admitted {
+				s.dialFailed(e, ErrSessionLimitReached)
+			}
 		}
 	}
 }
