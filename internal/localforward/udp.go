@@ -2,6 +2,7 @@ package localforward
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 
@@ -70,14 +71,17 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 			retire(key, sess)
 			return
 		}
-		s.dialSucceeded(e)
 		conn := socksconn.WrapUDP(raw, s.timeouts.UDPIdle)
 		_, werr := conn.Write(first)
 		if werr != nil {
 			_ = conn.Close()
+			if ctx.Err() == nil {
+				s.dialFailed(e, werr)
+			}
 			retire(key, sess)
 			return
 		}
+		s.dialSucceeded(e)
 		mu.Lock()
 		sess.conn = conn
 		stale := sessions[key] != sess || ctx.Err() != nil || closing
@@ -129,6 +133,9 @@ func (s *Set) serveUDP(ctx context.Context, e *entry, packetConn net.PacketConn)
 		_, werr := conn.Write(buf[:n])
 		if werr != nil {
 			retire(key, sess)
+			if !errors.Is(werr, net.ErrClosed) {
+				continue
+			}
 			mu.Lock()
 			if _, ok := sessions[key]; !ok && !closing {
 				start(key, source, buf[:n])

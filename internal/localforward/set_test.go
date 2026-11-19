@@ -415,3 +415,37 @@ func TestApplyDoesNotWaitForReleasedRuleSessions(t *testing.T) {
 		t.Fatal("Apply waited for a released rule's session")
 	}
 }
+
+type failWriteConn struct{ net.Conn }
+
+func (failWriteConn) Write([]byte) (int, error) { return 0, errDial }
+
+func TestUDPFirstWriteFailureIsReported(t *testing.T) {
+	var lc net.ListenConfig
+	probe, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listen := probe.LocalAddr().String()
+	_ = probe.Close()
+	var d net.Dialer
+	set := New(t.Context(), Dialer{UDP: func(ctx context.Context, addr string) (net.Conn, error) {
+		c, err := d.DialContext(ctx, "udp", addr)
+		return failWriteConn{c}, err
+	}}, socksconn.Timeouts{}, nil)
+	defer set.Close()
+	set.Apply([]profile.LocalForward{{Protocol: profile.PortForwardUDP, ListenAddr: listen, TargetAddr: "127.0.0.1:9"}})
+	client, err := d.DialContext(t.Context(), "udp", listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_, _ = client.Write([]byte("x"))
+	deadline := time.Now().Add(2 * time.Second)
+	for set.States()[0].Err == "" {
+		if time.Now().After(deadline) {
+			t.Fatal("first-write failure was not reported on the rule")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
