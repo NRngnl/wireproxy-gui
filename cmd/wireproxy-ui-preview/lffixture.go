@@ -43,13 +43,19 @@ func (f *fixture) localForwardScenario(name string, home, ts *profile.Profile) {
 		ts.TailscaleConfig.Hostname, ts.TailscaleConfig.Authenticated = "travel-node", true
 		ts.LocalForwards = []profile.LocalForward{
 			rule(profile.PortForwardTCP, "127.0.0.1:2222", "remote-pc:22"),
+			rule(profile.PortForwardTCP, "127.0.0.1:2224", "lab-node:22"),
 			rule(profile.PortForwardTCP, "127.0.0.1:2223", "build-server-with-a-very-long-machine-name.tail1234.ts.net:22"),
 			rule(profile.PortForwardUDP, "127.0.0.1:5353", "dns-box:53"),
 			rule(profile.PortForwardTCP, "[::1]:3306", "10.20.0.5:3306"),
 		}
 		f.statuses[ts.ID] = application.StatusRunning
 		f.setStates(ts.ID, nil, nil, ts.LocalForwards)
-		paths := []application.PeerPath{{Kind: application.PeerPathDirect}, {Kind: application.PeerPathRelay, Relay: "tok"}, {Kind: application.PeerPathRelay}}
+		paths := []application.PeerPath{
+			{Kind: application.PeerPathDirect},
+			{Kind: application.PeerPathPeerRelay, Relay: "192.0.2.9:7777"},
+			{Kind: application.PeerPathRelay, Relay: "tok"},
+			{Kind: application.PeerPathRelay},
+		}
 		for i, path := range paths {
 			f.states[ts.ID][i].Path = path
 		}

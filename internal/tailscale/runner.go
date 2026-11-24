@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/NRngnl/wireproxy-gui/internal/connection"
@@ -127,6 +128,16 @@ type localClient interface {
 
 type realNode struct {
 	server *tsnet.Server
+	onPath atomic.Pointer[func()]
+}
+
+func (n *realNode) handleLog(format string, _ ...any) {
+	if !isPeerPathLog(format) {
+		return
+	}
+	if fn := n.onPath.Load(); fn != nil {
+		(*fn)()
+	}
 }
 
 func (n *realNode) Up(ctx context.Context) (*ipnstate.Status, error) {
@@ -815,15 +826,17 @@ func newTSNetNode(p profile.Profile, stateDir string, userLogf func(string, ...a
 	if hostname == "" {
 		hostname = p.Name
 	}
-	server := &tsnet.Server{
+	node := &realNode{}
+	node.server = &tsnet.Server{
 		Dir:        nodeDir,
 		Hostname:   hostname,
 		AuthKey:    cfg.AuthKey,
 		ControlURL: cfg.ControlURL,
 		Ephemeral:  cfg.Ephemeral,
 		UserLogf:   userLogf,
+		Logf:       node.handleLog,
 	}
-	return &realNode{server: server}, nil
+	return node, nil
 }
 
 func profileStateDir(stateDir, profileID string) (string, error) {

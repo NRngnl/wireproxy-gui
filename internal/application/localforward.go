@@ -34,8 +34,9 @@ type LocalForwardState = connection.LocalForwardState
 type PeerPath = connection.PeerPath
 
 const (
-	PeerPathDirect = connection.PeerPathDirect
-	PeerPathRelay  = connection.PeerPathRelay
+	PeerPathDirect    = connection.PeerPathDirect
+	PeerPathRelay     = connection.PeerPathRelay
+	PeerPathPeerRelay = connection.PeerPathPeerRelay
 )
 
 // AddLocalForward stores a new rule and, while the profile is connected, starts listening on it.

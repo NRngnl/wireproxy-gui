@@ -225,6 +225,9 @@
   "Direct": "Direct",
   "Relay": "Relay",
   "Relay · {{.Region}}": "Relay · {{.Region}}",
+  "Peer relay": "Peer relay",
+  "Traffic goes through your tailnet's peer relay.": "Traffic goes through your tailnet's peer relay.",
+  "Traffic goes through your tailnet's peer relay at {{.Addr}}.": "Traffic goes through your tailnet's peer relay at {{.Addr}}.",
   "Traffic goes straight to this device.": "Traffic goes straight to this device.",
   "Traffic goes through a relay server, which adds latency. It switches to a direct path when one opens.": "Traffic goes through a relay server, which adds latency. It switches to a direct path when one opens."
 }
