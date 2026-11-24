@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/NRngnl/wireproxy-gui/compare/v0.5.0...v0.5.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **tailscale:** track live peer relay and direct forward paths ([#38](https://github.com/NRngnl/wireproxy-gui/issues/38)) ([4f121e0](https://github.com/NRngnl/wireproxy-gui/commit/4f121e04e72b6e7049ddf8c4df16ecea669c0f95))
+
 ## [0.5.0](https://github.com/NRngnl/wireproxy-gui/compare/v0.4.2...v0.5.0) (2026-11-19)
 
 
