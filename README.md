@@ -254,11 +254,14 @@ For example, TCP `127.0.0.1:2222` to `remote-pc:22` lets
   leave room for TCP `TIME_WAIT` and host sockets. When a budget is full, live
   sessions stay open, new sources or connections are refused, and the rule
   reports `"local forward session limit reached"` until a slot frees up.
-- On a Tailscale profile, each local forward whose target is a tailnet peer
-  shows `Direct` (traffic goes straight to the device) or `Relay · <region>`
-  (traffic goes through a DERP relay, which adds latency). Subnet-route and IP
-  targets that do not map to one peer, and WireGuard profiles, show nothing.
-  The indicator follows the Tailscale peer updates; it is not polled.
+- On a Tailscale profile, each local forward whose target is an active tailnet
+  peer shows `Direct` (traffic goes straight to the device), `Peer relay`
+  (traffic goes through a tailnet peer relay), or `Relay · <region>` (traffic
+  goes through a DERP relay, which adds latency). Idle peers, subnet-route and
+  IP targets that do not map to one peer, and WireGuard profiles show nothing.
+  The indicator updates dynamically from Tailscale peer and dataplane path
+  events, forward dial activity, and the peer idle timeout without periodic
+  polling.
 - TCP keepalive probes every 30 seconds on tunnel and host legs of SOCKS5 and
   local forwards. 30 seconds is below Tailscale's 45 second direct-path
   activity window, so a quiet session keeps the direct UDP path warm. For an

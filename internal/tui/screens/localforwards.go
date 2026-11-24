@@ -228,6 +228,11 @@ func pathText(path connection.PeerPath) string {
 	switch path.Kind {
 	case connection.PeerPathDirect:
 		return ", Direct"
+	case connection.PeerPathPeerRelay:
+		if path.Relay != "" {
+			return ", Peer relay · " + path.Relay
+		}
+		return ", Peer relay"
 	case connection.PeerPathRelay:
 		if path.Relay != "" {
 			return ", Relay · " + path.Relay

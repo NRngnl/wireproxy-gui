@@ -131,6 +131,13 @@ func peerPathTag(c *ui.Context, path application.PeerPath) {
 	case application.PeerPathDirect:
 		tag := display.Tag(c, tr("Direct"), display.TagProps{Color: display.TagGray, Size: theme.Small})
 		overlay.Tooltip(c, tag, tr("Traffic goes straight to this device."), overlay.TooltipProps{})
+	case application.PeerPathPeerRelay:
+		tip := tr("Traffic goes through your tailnet's peer relay.")
+		if path.Relay != "" {
+			tip = tr("Traffic goes through your tailnet's peer relay at {{.Addr}}.", map[string]any{"Addr": path.Relay})
+		}
+		tag := display.Tag(c, tr("Peer relay"), display.TagProps{Color: display.TagGray, Size: theme.Small})
+		overlay.Tooltip(c, tag, tip, overlay.TooltipProps{})
 	case application.PeerPathRelay:
 		label := tr("Relay")
 		if path.Relay != "" {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"sync"
 
 	"github.com/NRngnl/wireproxy-gui/internal/localforward"
 	"tailscale.com/wgengine/netstack"
@@ -64,5 +65,27 @@ func dialTailnet(ctx context.Context, node tsNode, peers *peerView, network, add
 	if err != nil {
 		return nil, err
 	}
-	return dialer.DialUserspace(ctx, network, netip.AddrPortFrom(ip, uint16(port)))
+	conn, err := dialer.DialUserspace(ctx, network, netip.AddrPortFrom(ip, uint16(port)))
+	if err != nil {
+		return nil, err
+	}
+	if network == "udp" {
+		return &kickOnFirstWriteConn{Conn: conn, kick: peers.kick}, nil
+	}
+	peers.kick()
+	return conn, nil
+}
+
+type kickOnFirstWriteConn struct {
+	net.Conn
+	once sync.Once
+	kick func()
+}
+
+func (c *kickOnFirstWriteConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if err == nil {
+		c.once.Do(c.kick)
+	}
+	return n, err
 }

@@ -23,12 +23,13 @@ type LocalForwardState struct {
 type PeerPathKind string
 
 const (
-	PeerPathUnknown PeerPathKind = ""
-	PeerPathDirect  PeerPathKind = "direct"
-	PeerPathRelay   PeerPathKind = "relay"
+	PeerPathUnknown   PeerPathKind = ""
+	PeerPathDirect    PeerPathKind = "direct"
+	PeerPathRelay     PeerPathKind = "relay"
+	PeerPathPeerRelay PeerPathKind = "peer-relay"
 )
 
-// PeerPath is the current route to the tailnet peer a rule targets. Relay names the DERP region when Kind is PeerPathRelay.
+// PeerPath is the current route to the tailnet peer a rule targets. Relay names the DERP region for PeerPathRelay, or the relay address for PeerPathPeerRelay.
 type PeerPath struct {
 	Kind  PeerPathKind
 	Relay string
